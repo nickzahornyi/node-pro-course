@@ -1,3 +1,4 @@
 certificates/
 *.pem
 *.key
+.DS_Stores
