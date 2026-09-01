@@ -1,0 +1,261 @@
+openapi: 3.0.3
+info:
+  title: Marketplace API
+  version: 1.0.0
+  description: Contract for products and orders in a small marketplace.
+security: []
+servers:
+  - url: http://localhost:3000
+paths:
+  /products:
+    get:
+      operationId: listProducts
+      summary: List products
+      description: Returns products using cursor-based pagination.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of products.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /products/{productId}:
+    parameters:
+      - $ref: '#/components/parameters/ProductId'
+    get:
+      operationId: getProduct
+      summary: Get a product
+      description: Returns one product by its identifier.
+      responses:
+        '200':
+          description: Product found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List orders
+      description: Returns orders using cursor-based pagination.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of orders.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    post:
+      operationId: createOrder
+      summary: Create an order
+      description: Creates a new order with one or more line items.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Reusing the same key with the same request body returns the same response; using it with a different body returns 422.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrder'
+      responses:
+        '201':
+          description: Order created, or the original response replayed.
+          headers:
+            Idempotency-Replay:
+              description: True when a stored response is replayed.
+              schema:
+                type: string
+                enum: ['true']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /orders/{orderId}:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    get:
+      operationId: getOrder
+      summary: Get an order
+      description: Returns one order by its identifier.
+      responses:
+        '200':
+          description: Order found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of records in one page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque token identifying where the next page starts; clients must not parse it.
+      schema:
+        type: string
+        minLength: 1
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      description: Unique product identifier.
+      schema:
+        type: string
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      description: Unique order identifier.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Request does not satisfy the API contract.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Requested resource was not found.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnprocessableEntity:
+      description: The request is structurally valid but violates a domain rule, such as referencing an unknown product or reusing an idempotency key with another body.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnexpectedError:
+      description: An unexpected error occurred while processing the request.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Product:
+      type: object
+      additionalProperties: false
+      required: [id, name, price_cents]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        price_cents: { type: integer, minimum: 0 }
+    OrderItemInput:
+      type: object
+      additionalProperties: false
+      required: [product_id, quantity]
+      properties:
+        product_id: { type: string }
+        quantity: { type: integer, minimum: 1 }
+    OrderItem:
+      type: object
+      additionalProperties: false
+      required: [product_id, quantity, unit_price_cents]
+      properties:
+        product_id: { type: string }
+        quantity: { type: integer, minimum: 1 }
+        unit_price_cents: { type: integer, minimum: 0 }
+    CreateOrder:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/OrderItemInput'
+    Order:
+      type: object
+      additionalProperties: false
+      required: [id, status, items, total_cents]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [created] }
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        total_cents: { type: integer, minimum: 0 }
+    ProductPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Product'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Opaque cursor for the next page, or null when no pages remain.
+    OrderPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Opaque cursor for the next page, or null when no pages remain.
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail, instance]
+      properties:
+        type: { type: string, format: uri, description: URI identifying the error type. }
+        title: { type: string, description: Short human-readable error title. }
+        status: { type: integer, minimum: 400, maximum: 599, description: HTTP status code. }
+        detail: { type: string, description: Explanation specific to this occurrence. }
+        instance: { type: string, description: Request path identifying this occurrence. }
