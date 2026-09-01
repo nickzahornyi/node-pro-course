@@ -18,19 +18,27 @@ export function createApp() {
   ];
   const orders = [];
   const idempotencyRecords = new Map();
-  const encodeCursor = (offset) => Buffer.from(String(offset)).toString('base64url');
+  const encodeCursor = (id) => Buffer.from(JSON.stringify({ after: id })).toString('base64url');
   const decodeCursor = (cursor) => {
-    if (!cursor) return 0;
-    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-    if (!/^\d+$/.test(decoded)) throw Object.assign(new Error('cursor must be a valid opaque token'), { status: 400 });
-    return Number(decoded);
+    if (!cursor) return null;
+    try {
+      const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+      if (typeof decoded.after !== 'string' || Object.keys(decoded).length !== 1) throw new Error();
+      return decoded.after;
+    } catch {
+      throw Object.assign(new Error('cursor must be a valid opaque token'), { status: 400 });
+    }
   };
   const page = (records, query) => {
-    const offset = decodeCursor(query.cursor);
+    const afterId = decodeCursor(query.cursor);
+    const afterIndex = afterId === null ? -1 : records.findIndex(({ id }) => id === afterId);
+    if (afterId !== null && afterIndex === -1) {
+      throw Object.assign(new Error('cursor does not reference an existing record'), { status: 400 });
+    }
     const limit = query.limit ?? 20;
-    const items = records.slice(offset, offset + limit);
-    const nextOffset = offset + items.length;
-    return { items, next_cursor: nextOffset < records.length ? encodeCursor(nextOffset) : null };
+    const items = records.slice(afterIndex + 1, afterIndex + 1 + limit);
+    const hasMore = afterIndex + 1 + items.length < records.length;
+    return { items, next_cursor: hasMore ? encodeCursor(items.at(-1).id) : null };
   };
 
   app.get('/products', (req, res) => res.json(page(products, req.query)));
@@ -51,9 +59,18 @@ export function createApp() {
       return next(Object.assign(new Error('Idempotency-Key was already used with a different request body'), { status: 422 }));
     }
     if (previous) return res.status(201).set('Idempotency-Replay', 'true').json(previous.order);
+    const unknownProductIds = [...new Set(req.body.items
+      .filter((item) => !products.some(({ id }) => id === item.product_id))
+      .map((item) => item.product_id))];
+    if (unknownProductIds.length > 0) {
+      return next(Object.assign(
+        new Error(`Unknown product_id: ${unknownProductIds.join(', ')}`),
+        { status: 422 },
+      ));
+    }
     const items = req.body.items.map((item) => {
       const product = products.find(({ id }) => id === item.product_id);
-      return { ...item, unit_price_cents: product?.price_cents ?? 0 };
+      return { ...item, unit_price_cents: product.price_cents };
     });
     const order = {
       id: `order-${orders.length + 1}`,

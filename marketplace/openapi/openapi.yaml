@@ -24,6 +24,8 @@ paths:
                 $ref: '#/components/schemas/ProductPage'
         '400':
           $ref: '#/components/responses/BadRequest'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
   /products/{productId}:
     parameters:
       - $ref: '#/components/parameters/ProductId'
@@ -40,6 +42,8 @@ paths:
                 $ref: '#/components/schemas/Product'
         '404':
           $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
   /orders:
     get:
       operationId: listOrders
@@ -57,6 +61,8 @@ paths:
                 $ref: '#/components/schemas/OrderPage'
         '400':
           $ref: '#/components/responses/BadRequest'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
     post:
       operationId: createOrder
       summary: Create an order
@@ -93,6 +99,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
   /orders/{orderId}:
     parameters:
       - $ref: '#/components/parameters/OrderId'
@@ -109,6 +117,8 @@ paths:
                 $ref: '#/components/schemas/Order'
         '404':
           $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
 components:
   parameters:
     Limit:
@@ -155,7 +165,13 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
     UnprocessableEntity:
-      description: Idempotency key was reused with a different request body.
+      description: The request is structurally valid but violates a domain rule, such as referencing an unknown product or reusing an idempotency key with another body.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnexpectedError:
+      description: An unexpected error occurred while processing the request.
       content:
         application/problem+json:
           schema:

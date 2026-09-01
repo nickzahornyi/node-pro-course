@@ -54,3 +54,30 @@ test('reusing a key with another body returns 422 problem+json', async () => {
   assert.equal(response.status, 422);
   assert.match(response.headers.get('content-type'), /^application\/problem\+json/);
 });
+
+test('unknown product is a documented 422 problem+json', async () => {
+  const response = await fetch(`${baseUrl}/orders`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'unknown-product' },
+    body: JSON.stringify({ items: [{ product_id: 'does-not-exist', quantity: 1 }] }),
+  });
+  assert.equal(response.status, 422);
+  assert.match(response.headers.get('content-type'), /^application\/problem\+json/);
+  assert.match((await response.json()).detail, /does-not-exist/);
+});
+
+test('pagination uses an opaque keyset cursor', async () => {
+  const firstPage = await fetch(`${baseUrl}/products?limit=1`);
+  assert.equal(firstPage.status, 200);
+  const first = await firstPage.json();
+  assert.equal(first.items[0].id, 'prod-1');
+  assert.equal(typeof first.next_cursor, 'string');
+
+  const secondPage = await fetch(`${baseUrl}/products?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`);
+  assert.equal(secondPage.status, 200);
+  assert.equal((await secondPage.json()).items[0].id, 'prod-2');
+
+  const offsetCursor = Buffer.from('1').toString('base64url');
+  const rejected = await fetch(`${baseUrl}/products?cursor=${offsetCursor}`);
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.headers.get('content-type'), /^application\/problem\+json/);
+});
