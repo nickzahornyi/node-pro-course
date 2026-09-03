@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: marketplace
+      POSTGRES_USER: marketplace
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketplace -d marketplace"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DB_URL: postgresql://marketplace@db:5432/marketplace
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      DB_POOL_MAX: 10
+    secrets:
+      - db_password
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+
+volumes:
+  postgres_data:
