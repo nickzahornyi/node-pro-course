@@ -7,8 +7,9 @@ Express-застосунок використовує `express-openapi-validator
 
 ```bash
 npm install
-npm start
 ```
+
+Перед запуском підготуйте конфігурацію та файл-секрет за інструкцією [Configuration](#configuration). Без обов'язкового `DB_URL` застосунок завершується з помилкою.
 
 Сервер працює на `http://localhost:3000` (порт можна змінити змінною `PORT`).
 
@@ -80,7 +81,8 @@ mv /tmp/marketplace.env .env
 cp .env.example .env
 mkdir -p secrets
 printf '%s\n' 'marketplace-local-password' > secrets/db_password
-chmod 600 secrets/db_password
+chmod 700 secrets
+chmod 644 secrets/db_password
 docker compose up --build -d
 ```
 
@@ -100,7 +102,9 @@ curl http://localhost:3000/db-health
 curl http://localhost:3000/health
 ```
 
-`rotate.sh` змінює пароль ролі PostgreSQL, оновлює файл-секрет і закриває старі з'єднання. `pg.Pool` перечитує файл для кожного нового з'єднання, тому застосунок продовжує працювати, а `uptime_seconds` не обнуляється.
+`rotate.sh` бере роль і назву БД з `DB_URL` сервісу `app` у результаті `docker compose config --format json` (включно з overrides). Для запуску скрипта потрібні Node.js, OpenSSL і Docker Compose. Скрипт змінює пароль ролі PostgreSQL, оновлює файл-секрет і закриває старі з'єднання. `pg.Pool` перечитує файл для кожного нового з'єднання, тому застосунок продовжує працювати, а `uptime_seconds` не обнуляється.
+
+Runtime-образ містить лише production-залежності, `dist`, OpenAPI та `.env.example`; процес працює як `node`. Compose монтує файл-секрет із хоста: режим `644` дозволяє читати його користувачу контейнера, а каталог `secrets` із режимом `700` закриває доступ іншим користувачам хоста. Під час ротації файл оновлюється на місці, щоб bind mount бачив новий вміст.
 
 Після `docker compose down -v` поверніть стартовий пароль у `secrets/db_password` перед наступним запуском:
 
