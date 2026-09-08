@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { createApp } from '../src/app.js';
+import { createApp } from '../dist/app.js';
 
 let server;
 let baseUrl;
