@@ -4,5 +4,5 @@ CREATE INDEX orders_user_created_idx ON orders (user_id, created_at DESC) INCLUD
 -- q2: only the 1% of orders waiting for payment, already ordered for LIMIT.
 CREATE INDEX orders_pending_created_idx ON orders (created_at DESC) INCLUDE (id, user_id, total)
 WHERE status = 'pending';
--- q3: ordinary email uniqueness does not support lower(email).
-CREATE INDEX users_lower_email_idx ON users (lower(email));
+-- q3: case-insensitive product lookup requires an expression index.
+CREATE INDEX products_lower_name_idx ON products (lower(name));

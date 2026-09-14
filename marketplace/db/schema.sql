@@ -3,10 +3,13 @@ BEGIN;
 
 CREATE TABLE users (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    email text NOT NULL UNIQUE CHECK (email = btrim(email) AND position('@' IN email) > 1),
+    email text NOT NULL CHECK (email = btrim(email) AND position('@' IN email) > 1),
     display_name text NOT NULL CHECK (length(btrim(display_name)) > 0),
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Integrity rule: an email identifies one account regardless of letter case.
+CREATE UNIQUE INDEX users_lower_email_key ON users (lower(email));
 
 CREATE TABLE products (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -33,5 +36,9 @@ CREATE TABLE order_items (
     unit_price numeric(12,2) NOT NULL CHECK (unit_price >= 0 AND unit_price <> 'NaN'::numeric),
     UNIQUE (order_id, product_id)
 );
+
+-- Support parent DELETE/UPDATE foreign-key checks from the initial schema.
+CREATE INDEX products_seller_id_idx ON products (seller_id);
+CREATE INDEX order_items_product_id_idx ON order_items (product_id);
 
 COMMIT;

@@ -153,6 +153,9 @@ docker compose exec -T db psql -X -U marketplace -d marketplace -c 'SELECT index
 
 Очікується 4 FK; кожен план до індексів містить Seq Scan, після — індексний вузол
 без Seq Scan. `indexes.sql` додає один covering, один partial та один expression індекс.
+Початкова схема окремо забезпечує UNIQUE на `lower(email)` і містить індекси
+`products.seller_id` та `order_items.product_id` для перевірок зовнішніх ключів.
+q1 вибирає замовлення за березень 2026; q3 шукає товар за `lower(name)`.
 Фактичні плани й час виконання: [OPTIMIZATIONS](db/OPTIMIZATIONS.md).
 Схема й seed застосовуються один раз до порожньої БД; seed закінчується `VACUUM (ANALYZE)`.
 Існуючі HTTP-обробники залишаються in-memory; `/db-health` перевіряє реальну БД.
