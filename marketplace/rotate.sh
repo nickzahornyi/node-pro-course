@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")"
 secret_file="./secrets/db_password"
 # Read the effective application configuration, including Compose overrides.
-compose_config="$(docker compose config --format json)"
+compose_config="$(docker compose --profile api config --format json)"
 db_role="$(printf '%s' "$compose_config" | node --input-type=module -e 'let s=""; for await (const c of process.stdin) s+=c; const u=new URL(JSON.parse(s).services.app.environment.DB_URL); const role=decodeURIComponent(u.username); if (!role) throw new Error("DB_URL requires a role"); process.stdout.write(role);')"
 db_name="$(printf '%s' "$compose_config" | node --input-type=module -e 'let s=""; for await (const c of process.stdin) s+=c; const u=new URL(JSON.parse(s).services.app.environment.DB_URL); const db=decodeURIComponent(u.pathname.slice(1)); if (!db) throw new Error("DB_URL requires a database"); process.stdout.write(db);')"
 new_password="$(openssl rand -hex 24)"
