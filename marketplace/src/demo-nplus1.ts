@@ -4,14 +4,17 @@ import { Order } from './entities/order.entity.js';
 import { OrderItem } from './entities/order-item.entity.js';
 import { Product } from './entities/product.entity.js';
 import { QueryCountLogger } from './query-count-logger.js';
+import { validate } from './config/env.schema.js';
 
+const { NPLUS1_SIZES: sizes } = validate(process.env);
 const logger = new QueryCountLogger();
 dataSource.setOptions({ logging: ['query'], logger });
 await dataSource.initialize();
 try {
   const ordersRepo = dataSource.getRepository(Order);
-  assert.ok(await ordersRepo.count() >= 10, 'Run npm run seed first (at least 10 orders required)');
-  for (const size of [5, 10]) {
+  const available = await ordersRepo.count();
+  assert.ok(available >= Math.max(...sizes), `NPLUS1_SIZES requires ${Math.max(...sizes)} orders; database has ${available}. Add data or choose smaller sizes.`);
+  for (const size of sizes) {
     // Exclude connection setup/seed checks; count all SELECTs for each strategy.
     logger.reset();
     const naive = await ordersRepo.find({ order: { id: 'ASC' }, take: size });

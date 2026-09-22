@@ -60,6 +60,7 @@ curl -i -X POST http://localhost:3000/orders \
 | `DB_PASSWORD` | ні | Пароль ORM зі сховища Infisical або CI; якщо відсутній, ORM перечитує `DB_PASSWORD_FILE` на кожне з'єднання. |
 | `DB_PASSWORD_FILE` | ні, `/run/secrets/db_password` | Шлях до файла з паролем БД |
 | `DB_POOL_MAX` | ні, `10` | Максимальний розмір пулу з'єднань |
+| `NPLUS1_SIZES` | ні, `5,10` | Щонайменше два різні розміри вибірки, цілі числа 1–10000 через кому |
 
 Перевірка синхронності контракту конфігурації:
 
@@ -80,16 +81,15 @@ mv /tmp/marketplace.env .env
 
 ### Запуск із PostgreSQL
 
-Створіть локальні файли з прикладів, якщо їх ще немає:
+Запуск із чистого клону (потрібні Node.js та Docker Desktop):
 
 ```bash
-cp .env.example .env
-mkdir -p secrets
-printf '%s\n' 'marketplace-local-password' > secrets/db_password
-chmod 700 secrets
-chmod 644 secrets/db_password
-docker compose --profile api up --build -d --wait
+npm run api:up
 ```
+
+Команда створює відсутній `secrets/db_password` із публічного dev-прикладу,
+але не перезаписує наявний, зокрема після ротації. Compose передає конфігурацію
+без `.env`. Прямий запуск профілю через Compose потребує вже підготовленого файла.
 
 Перевірка процесу та підключення до БД:
 
@@ -135,6 +135,7 @@ export SKIP_VAULT=1    # у грейдера немає доступу до сх
 npm run build
 npm run migrate
 npm run migrate:show
+npm run check:indexes
 npm run migrate:revert
 npm run migrate
 npm run seed && npm run seed
@@ -179,6 +180,12 @@ npm run build
 повністю: UNIQUE lower(email), lower(name), covering user/date та partial pending.
 У entities вони позначені `@Index(..., { synchronize: false })`, щоб генератор
 не намагався переробляти їх; два звичайні FK-індекси описано через `@Index` із колонками.
+`npm run check:indexes` звіряє ці чотири індекси з каталогом PostgreSQL: таблицю,
+UNIQUE, вирази, порядок і напрям ключів, INCLUDE, предикат та валідність.
+`npm run migration:generate` запускає цю перевірку перед генератором і зупиняється
+при дрейфі; для порожньої БД перевірку пропущено. Прямий CLI TypeORM цієї перевірки
+не має. Після міграцій запускайте `check:indexes`; при навмисній зміні індексів
+оновлюйте міграцію та контракт у `src/index-contract.ts` разом.
 Решта NOT NULL, CHECK, identity, timestamptz, FK і UNIQUE(order_id, product_id)
 збережена зі схеми HW-12. down видаляє індекси, FK та таблиці у зворотному порядку.
 
@@ -205,6 +212,11 @@ LIMIT застосовується до підзапиту ID замовлень
 залишаються в результаті. Демо перевіряє повну рівність графів і стабільність одного
 SQL-запиту при збільшенні N; кешування вимкнене. `relationLoadStrategy: 'query'`
 тут не використовується.
+
+Розміри можна змінити: `NPLUS1_SIZES=2,7,10 npm run demo:nplus1`.
+Для подвоєного набору: `NPLUS1_SIZES=10,20 npm run demo:nplus1`.
+Потрібна БД із щонайменше найбільшим указаним числом замовлень: демо завершується
+помилкою при нестачі, а не підміняє запитаний N фактичним розміром seed.
 
 ### Repository чи QueryBuilder
 
