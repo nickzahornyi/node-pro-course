@@ -1,5 +1,9 @@
 # Marketplace API contract
 
+Для поточного ДЗ **HW-13 (TypeORM)** починайте з [Grading](#grading).
+Усі npm/Compose-команди виконуються в `marketplace/` після клонування репозиторію.
+Розділ HW-12 нижче збережено як окремий SQL-стенд попереднього завдання.
+
 Домашнє завдання виконане за **варіантом Б — runtime-валідація на кордоні**.
 Express-застосунок використовує `express-openapi-validator` для перевірки запитів і відповідей за OpenAPI-спекою. Дані зберігаються in-memory і скидаються після перезапуску.
 
@@ -52,9 +56,11 @@ curl -i -X POST http://localhost:3000/orders \
 | --- | --- | --- |
 | `NODE_ENV` | ні, `development` | Режим виконання |
 | `PORT` | ні, `3000` | HTTP-порт, ціле число 1–65535 |
-| `DB_URL` | так | PostgreSQL URL без пароля. Джерело — конфігураційне сховище ДЗ №11: локальний ігнорований `.env`; у Compose — runtime environment сервісу app (`postgresql://marketplace@db:5432/marketplace`). Для prod — те саме ім'я у конфігурації розгортання, пароль із файла-секрета. |
+| `DB_URL` | так | PostgreSQL URL без пароля. ORM: сховище Infisical dev/prod → process.env або CI environment. Старий HTTP-застосунок: локальний `.env` / runtime environment Compose. |
+| `DB_PASSWORD` | ні | Пароль ORM зі сховища Infisical або CI; якщо відсутній, ORM перечитує `DB_PASSWORD_FILE` на кожне з'єднання. |
 | `DB_PASSWORD_FILE` | ні, `/run/secrets/db_password` | Шлях до файла з паролем БД |
 | `DB_POOL_MAX` | ні, `10` | Максимальний розмір пулу з'єднань |
+| `NPLUS1_SIZES` | ні, `5,10` | Щонайменше два різні розміри вибірки, цілі числа 1–10000 через кому |
 
 Перевірка синхронності контракту конфігурації:
 
@@ -75,16 +81,15 @@ mv /tmp/marketplace.env .env
 
 ### Запуск із PostgreSQL
 
-Створіть локальні файли з прикладів, якщо їх ще немає:
+Запуск із чистого клону (потрібні Node.js та Docker Desktop):
 
 ```bash
-cp .env.example .env
-mkdir -p secrets
-printf '%s\n' 'marketplace-local-password' > secrets/db_password
-chmod 700 secrets
-chmod 644 secrets/db_password
-docker compose up --build -d
+npm run api:up
 ```
+
+Команда створює відсутній `secrets/db_password` із публічного dev-прикладу,
+але не перезаписує наявний, зокрема після ротації. Compose передає конфігурацію
+без `.env`. Прямий запуск профілю через Compose потребує вже підготовленого файла.
 
 Перевірка процесу та підключення до БД:
 
@@ -112,7 +117,155 @@ Runtime-образ містить лише production-залежності, `dis
 printf '%s\n' 'marketplace-local-password' > secrets/db_password
 ```
 
+## Grading
+
+Потрібні Node.js 22+ і Docker Compose з підтримкою `--wait`.
+Після клону перейдіть у каталог сервісу: `cd marketplace`.
+Використовуйте чистий volume: **не запускайте db/schema.sql або db/seed.sql HW-12
+перед ORM-міграцією**. Для ізоляції від попередніх ДЗ можна задати
+`export COMPOSE_PROJECT_NAME=marketplace-hw13` перед командами нижче.
+Порт 5432 має бути вільним; для іншого порту задайте `DB_PUBLISHED_PORT` і
+той самий порт у `DB_URL`.
+
+```bash
+npm ci && npx tsc --noEmit
+docker compose up -d --wait
+export DB_URL=postgresql://marketplace@127.0.0.1:5432/marketplace DB_PASSWORD=marketplace-local-password
+export SKIP_VAULT=1    # у грейдера немає доступу до сховища
+npm run build
+npm run migrate
+npm run migrate:show
+npm run check:indexes
+npm run migrate:revert
+npm run migrate
+npm run seed && npm run seed
+docker compose exec -T db psql -X -U marketplace -d marketplace -c 'SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM products) AS products, (SELECT count(*) FROM orders) AS orders, (SELECT count(*) FROM order_items) AS order_items;'
+npm run demo:nplus1
+npm run report
+npm run check:env
+```
+
+Очікується `[X] InitialMarketplace…`, а після обох seed — `10 users`, `10 products`,
+`10 orders`, `20 order_items`. `migrate:revert` справді видаляє створені таблиці,
+тому виконуйте його лише на тестовій БД: усі її доменні дані буде втрачено.
+Грейдер не потребує `.env`, `.secrets/`, CLI Infisical або ручного створення secret.
+База використовує публічний dev-пароль із `db/db_password.example`, змонтований
+у Postgres як `POSTGRES_PASSWORD_FILE`. Усі мережеві підключення все одно проходять
+парольну автентифікацію. HTTP-застосунок вмикається окремим профілем `api`.
+
+## HW-13: entities та міграції
+
+`src/entities/` містить усі чотири таблиці та двосторонні relations; `OrderItem` —
+явна join-entity з кількістю й ціною на момент покупки. `synchronize: false`,
+`migrationsRun: false`: тільки явний `npm run migrate` змінює схему.
+Збірка виконується `tsc` з `emitDecoratorMetadata`; ORM CLI працює з `dist/data-source.js`.
+
+У HW-12 гроші були `numeric` в основних одиницях. Відповідно до нової умови HW-13
+вони представлені цілими копійками: `price_cents`, `total_cents`, `unit_price_cents`
+типу PostgreSQL `bigint`. Тип зберігає початковий діапазон сум; у TypeScript він
+має тип `string`, обчислення seed використовують `BigInt`, а агрегати повертаються
+десятковими рядками. `number`/float-трансформерів для грошей немає.
+Початкова міграція розрахована на порожню БД; це не in-place конвертація даних HW-12.
+
+Міграцію `1789797879157-InitialMarketplace.ts` реально згенеровано командою:
+
+```bash
+npm run build
+npm run migration:generate -- src/migrations/InitialMarketplace
+npm run build
+```
+
+Це опис походження, а не команда повторного встановлення: готова міграція вже в репо.
+Після рев'ю в up/down додано чотири PostgreSQL-індекси, які генератор не описує
+повністю: UNIQUE lower(email), lower(name), covering user/date та partial pending.
+У entities вони позначені `@Index(..., { synchronize: false })`, щоб генератор
+не намагався переробляти їх; два звичайні FK-індекси описано через `@Index` із колонками.
+`npm run check:indexes` звіряє ці чотири індекси з каталогом PostgreSQL: таблицю,
+UNIQUE, вирази, порядок і напрям ключів, INCLUDE, предикат та валідність.
+`npm run migration:generate` запускає цю перевірку перед генератором і зупиняється
+при дрейфі; для порожньої БД перевірку пропущено. Прямий CLI TypeORM цієї перевірки
+не має. Після міграцій запускайте `check:indexes`; при навмисній зміні індексів
+оновлюйте міграцію та контракт у `src/index-contract.ts` разом.
+Решта NOT NULL, CHECK, identity, timestamptz, FK і UNIQUE(order_id, product_id)
+збережена зі схеми HW-12. down видаляє індекси, FK та таблиці у зворотному порядку.
+
+### Політика видалення
+
+`RESTRICT` на products → seller, orders → user, order_items → product захищає
+посилання на користувачів і товари в історії. `CASCADE` на order_items → order
+видаляє залежні позиції, коли дозволено видалити саме замовлення; позиції без
+замовлення не мають сенсу. Бізнес-заборона видалення оплачених замовлень належить
+майбутній транзакційній логіці, а не автоматичному ORM cascade-save.
+
+### N+1: список замовлень із позиціями та товарами
+
+Демо вмикає `logging: ['query']` і друкує весь SQL. Виміряно на детермінованому seed
+(по дві позиції на замовлення):
+
+| Кількість замовлень N | Наївно: 1 + N + 2N | leftJoinAndSelect |
+| --- | --- | --- |
+| 5 | 16 | 1 |
+| 10 | 31 | 1 |
+
+Лічильник скидається після ініціалізації з'єднання, перед кожним способом завантаження.
+LIMIT застосовується до підзапиту ID замовлень, а не до рядків JOIN: усі позиції
+залишаються в результаті. Демо перевіряє повну рівність графів і стабільність одного
+SQL-запиту при збільшенні N; кешування вимкнене. `relationLoadStrategy: 'query'`
+тут не використовується.
+
+Розміри можна змінити: `NPLUS1_SIZES=2,7,10 npm run demo:nplus1`.
+Для подвоєного набору: `NPLUS1_SIZES=10,20 npm run demo:nplus1`.
+Потрібна БД із щонайменше найбільшим указаним числом замовлень: демо завершується
+помилкою при нестачі, а не підміняє запитаний N фактичним розміром seed.
+
+### Repository чи QueryBuilder
+
+Repository використовуємо для простого пошуку, CRUD і завантаження entities за
+відомими полями. QueryBuilder — коли потрібні явні JOIN, агрегати, GROUP BY або
+контроль пагінації графа; звіт у `src/report.ts` групує сплачений/відвантажений
+виторг за продавцем через `createQueryBuilder().getRawMany()`, що не виражається `find()`.
+Виторг рахується з історичного `unit_price_cents`, не з поточної ціни товару.
+
+### Infisical: основний шлях
+
+У попередньому ДЗ використовували файлові секрети, тому Infisical додається тут.
+Реальний проєкт Infisical користувач ще не створив: live-доступ не перевірений.
+Шлях грейдера `SKIP_VAULT=1` перевіряється незалежно від сховища.
+
+1. Встановіть [Infisical CLI](https://infisical.com/docs/cli/overview), створіть проєкт
+   та оточення `dev`/`prod`. Додайте `DB_URL` без пароля і `DB_PASSWORD` у кожне
+   оточення (для dev значення наведені у Grading; для prod — власна БД).
+2. Виконайте `infisical login` або використайте machine-identity token.
+3. Створіть локальний файл credentials:
+
+```bash
+mkdir -p .secrets
+cp scripts/infisical.env.example .secrets/infisical.env
+chmod 700 .secrets
+chmod 600 .secrets/infisical.env
+```
+
+Вкажіть власний `INFISICAL_PROJECT_ID` у файлі; за потреби `INFISICAL_TOKEN`.
+`.secrets/` виключена і з Git, і з Docker build context. У DataSource немає dotenv
+та зашитих креденшелів: `validate(process.env)` перевіряє конфігурацію з обгортки.
+ORM використовує пароль зі сховища; за відсутності `DB_PASSWORD` збережено
+async callback для файлового секрету з ДЗ №11.
+
+```bash
+unset SKIP_VAULT
+npm run build
+npm run migrate
+npm run seed
+```
+
+Усі шість DB-команд починаються з `bash scripts/with-secrets.sh dev ...`.
+Для prod приклад: `bash scripts/with-secrets.sh prod npx typeorm migration:show -d dist/data-source.js`.
+Обгортка виконує [infisical run](https://infisical.com/docs/cli/commands/run);
+у CI `SKIP_VAULT=1` перевіряється після відокремлення аргументу dev і до читання credentials.
+
 ## HW-12: дата-шар та оптимізація
+
+Архівний SQL-стенд: застосовуйте на окремому volume, не поверх ORM-схеми HW-13.
 
 Після клонування гілки `hw-12` перейдіть у `marketplace/` (проєкт знаходиться
 в підкаталозі репозиторію). Потрібен запущений Docker із Compose; локальні Node.js,
@@ -132,7 +285,9 @@ docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -U marketplace -d marketpla
 ```
 
 Скрипт створює відсутній secret із `db/db_password.example`; наявний пароль не
-перезаписує. Postgres ініціалізується цим самим файлом. Нових env-файлів у git немає.
+перезаписує. Нова БД ініціалізується окремим read-only bootstrap-секретом із
+`db/db_password.example`. Реальний пароль після ротації зберігається у volume;
+після видалення volume поверніть runtime secret до прикладу. Нових реальних env-файлів у git немає.
 DB_URL застосунку вказує на цю саму БД `marketplace` у Compose; у prod значення
 задається у середовищі розгортання через існуючу Zod-схему.
 

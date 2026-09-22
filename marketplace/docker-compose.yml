@@ -6,7 +6,8 @@ services:
       POSTGRES_USER: marketplace
       POSTGRES_PASSWORD_FILE: /run/secrets/db_password
     secrets:
-      - db_password
+      - source: db_bootstrap_password
+        target: db_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U marketplace -d marketplace"]
       interval: 2s
@@ -14,8 +15,11 @@ services:
       retries: 15
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${DB_PUBLISHED_PORT:-5432}:5432"
 
   app:
+    profiles: [api]
     build: .
     environment:
       NODE_ENV: development
@@ -32,6 +36,8 @@ services:
       - "3000:3000"
 
 secrets:
+  db_bootstrap_password:
+    file: ./db/db_password.example
   db_password:
     file: ./secrets/db_password
 

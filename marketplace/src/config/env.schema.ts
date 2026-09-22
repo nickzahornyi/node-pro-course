@@ -35,7 +35,15 @@ export const envSchema = z.object({
     }
   }),
   DB_PASSWORD_FILE: z.string().min(1).default('/run/secrets/db_password'),
+  DB_PASSWORD: z.string().min(1).optional(),
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
+  NPLUS1_SIZES: z.string().default('5,10').superRefine((value, ctx) => {
+    const sizes = value.split(',').map((part) => Number(part.trim()));
+    if (sizes.length < 2 || sizes.some((n) => !Number.isSafeInteger(n) || n < 1 || n > 10000)
+      || new Set(sizes).size !== sizes.length) {
+      ctx.addIssue({ code: 'custom', message: 'use at least two distinct integer sizes from 1 to 10000, e.g. 5,10,20' });
+    }
+  }).transform((value) => value.split(',').map((part) => Number(part.trim()))),
 });
 
 export type Env = z.infer<typeof envSchema>;

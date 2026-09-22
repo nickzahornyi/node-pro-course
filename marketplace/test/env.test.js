@@ -44,3 +44,15 @@ test('reports malformed DB_URL and invalid PORT together', () => {
 test('reports missing DB_URL', () => {
   assert.throws(() => validate({}), /DB_URL:/);
 });
+
+test('N+1 sizes support defaults and custom samples', () => {
+  const DB_URL = 'postgresql://marketplace@localhost/marketplace';
+  assert.deepEqual(validate({ DB_URL }).NPLUS1_SIZES, [5, 10]);
+  assert.deepEqual(validate({ DB_URL, NPLUS1_SIZES: '2, 7,20' }).NPLUS1_SIZES, [2, 7, 20]);
+});
+
+for (const sizes of ['1', '5,5', '0,10', '2.5,10', 'two,10', '5,10001', '5,']) {
+  test(`rejects invalid N+1 sizes: ${sizes}`, () => {
+    assert.throws(() => validate({ DB_URL: 'postgresql://marketplace@localhost/marketplace', NPLUS1_SIZES: sizes }), /NPLUS1_SIZES:/);
+  });
+}
