@@ -17,7 +17,7 @@ try {
         .where('lower(user.email) = :email', { email }).getOne();
       if (!user) {
         user = await manager.save(User, manager.create(User, {
-          email, displayName: `Seed user ${n}`, createdAt: new Date('2026-01-01T00:00:00Z'),
+          email, displayName: `Seed user ${n}`, balanceCents: '1000000000', createdAt: new Date('2026-01-01T00:00:00Z'),
         }));
       }
       users.push(user);

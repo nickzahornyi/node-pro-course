@@ -7,6 +7,7 @@ import { User } from './entities/user.entity.js';
 import { Product } from './entities/product.entity.js';
 import { Order } from './entities/order.entity.js';
 import { OrderItem } from './entities/order-item.entity.js';
+import { Job } from './entities/job.entity.js';
 
 // No dotenv here: Infisical (or the CI runner) supplies the environment.
 const config = validate(process.env);
@@ -22,7 +23,7 @@ export default new DataSource({
   poolSize: config.DB_POOL_MAX,
   synchronize: false,
   migrationsRun: false,
-  entities: [User, Product, Order, OrderItem],
+  entities: [User, Product, Order, OrderItem, Job],
   migrations: [fileURLToPath(new URL('./migrations/*.js', import.meta.url))],
   logging: false,
 });

@@ -119,11 +119,13 @@ printf '%s\n' 'marketplace-local-password' > secrets/db_password
 
 ## Grading
 
+`cd marketplace` — перша команда після клону репозиторію; усі команди нижче виконуються в цьому каталозі з `package.json`.
+
 Потрібні Node.js 22+ і Docker Compose з підтримкою `--wait`.
 Після клону перейдіть у каталог сервісу: `cd marketplace`.
 Використовуйте чистий volume: **не запускайте db/schema.sql або db/seed.sql HW-12
 перед ORM-міграцією**. Для ізоляції від попередніх ДЗ можна задати
-`export COMPOSE_PROJECT_NAME=marketplace-hw13` перед командами нижче.
+`export COMPOSE_PROJECT_NAME=marketplace-hw14` перед командами нижче.
 Порт 5432 має бути вільним; для іншого порту задайте `DB_PUBLISHED_PORT` і
 той самий порт у `DB_URL`.
 
@@ -143,15 +145,83 @@ docker compose exec -T db psql -X -U marketplace -d marketplace -c 'SELECT (SELE
 npm run demo:nplus1
 npm run report
 npm run check:env
+npm run demo:race
+npm run demo:workers
+npm run demo:retry
+npm test
+npm run test:concurrency
 ```
 
-Очікується `[X] InitialMarketplace…`, а після обох seed — `10 users`, `10 products`,
-`10 orders`, `20 order_items`. `migrate:revert` справді видаляє створені таблиці,
-тому виконуйте його лише на тестовій БД: усі її доменні дані буде втрачено.
+Очікуються `[X] InitialMarketplace…` і `[X] CheckoutQueue…`, а після обох seed — `10 users`, `10 products`,
+`10 orders`, `20 order_items`. `migrate:revert` відкочує останню міграцію:
+для HW-14 видаляє jobs і balance_cents, повторний revert видалить таблиці HW-13.
+Виконуйте revert лише на тестовій БД: дані відкочених структур буде втрачено.
 Грейдер не потребує `.env`, `.secrets/`, CLI Infisical або ручного створення secret.
 База використовує публічний dev-пароль із `db/db_password.example`, змонтований
 у Postgres як `POSTGRES_PASSWORD_FILE`. Усі мережеві підключення все одно проходять
 парольну автентифікацію. HTTP-застосунок вмикається окремим профілем `api`.
+
+## Конкурентність
+
+HW-14 додає `checkout` у `src/checkout.ts`, чергу `jobs` і `users.balance_cents`
+міграцією `CheckoutQueue1790110000000`. `synchronize` залишається `false`.
+Це data-layer операція; старий демонстраційний HTTP API із HW-1 не переведений
+на PostgreSQL. Демо викликають саме транзакційний checkout, без HTTP і без черги
+на рівні застосунку: усі 50 Promise запускаються одразу, очікування в пулі БД допустиме.
+
+Обрано atomic UPDATE, а не попередній SELECT FOR UPDATE: для одного товару
+`UPDATE ... SET stock = stock - quantity WHERE stock >= quantity RETURNING price_cents`
+одночасно перевіряє залишок, блокує рядок і повертає актуальну ціну. Баланс
+списується аналогічно з умовою достатності коштів. В одному `db.transaction`
+через один manager виконуються обидва UPDATE, INSERT order, items і job.
+Будь-яка помилка відкочує все; гроші обчислюються через BigInt, без float.
+Для майбутнього multi-product checkout потрібен однаковий порядок блокування товарів.
+
+Результати реального прогону PostgreSQL 17 (2026-09-23, пул 10):
+
+| Перевірка | Результат |
+| --- | --- |
+| `demo:race` | 50 спроб, 10 успішних, stock 0, від'ємних залишків 0 |
+| Атомарність гонки | 10 orders, 10 items, 10 jobs; баланс 1000000000 → 999999000 |
+| `demo:workers` | 12 задач, 3 воркери по 4; двічі 0; 458.1 мс проти послідовних 1200 мс |
+| `demo:retry` | 1 повтор після 40001; баланс 1000 + 100 + 200 = 1300 |
+
+Повторний acceptance-прогін у чистій копії без `node_modules`, `dist`, `.env`
+і секретів, на новому Docker volume: `npm ci`, `tsc --noEmit`, міграції,
+seed двічі й усі три демо пройшли. Workers: 447.0 мс; при пулі 2 — 665.5 мс.
+Race при пулі 50 також дав рівно 10 успіхів. Перевірено 30 тестів без БД,
+6 інтеграційних, down/up нової міграції та відсутність schema drift TypeORM.
+
+Кожне демо створює власного UUID-користувача і тестовий товар, а після assertions
+видаляє лише свої дані. Тому повторні запуски незалежні й не поповнюють stock
+існуючих товарів. Покупець race має завідомо надлишковий баланс; нові користувачі
+звичайного seed також отримують 1000000000 копійок. У реальних користувачів після
+міграції баланс 0: міграція не вигадує кошти.
+
+Воркер тримає `FOR UPDATE SKIP LOCKED` і транзакцію до завершення обробки;
+`result`, `status=done` і `processed=processed+1` комітяться разом. Порожня вибірка
+перевіряється окремим читанням pending: якщо задачі заблоковані іншими воркерами,
+воркер чекає та пробує знову. Це drain-worker для поточної черги, не постійний daemon.
+Обробка демо — імітація 100 мс та запис чека в БД. Гарантія одного committed
+результату не поширюється автоматично на зовнішній SMTP/HTTP: для реальної відправки
+потрібні ідемпотентний одержувач або outbox. Після rollback callback може виконатися знову.
+
+Retry ловить **тільки 40001 (serialization failure) і 40P01 (deadlock)**: це
+конфлікти транзакцій, для яких повтор із новими читаннями має сенс. Бізнес-відмови,
+порушення constraints та мережеві помилки не повторюються — останні можуть мати
+невідомий результат COMMIT. Повторюється весь `REPEATABLE READ` callback,
+максимум 5 спроб, exponential backoff 10–500 мс із jitter. Демо бар'єром змушує
+дві перші транзакції прочитати однаковий snapshot, тому 40001 не залежить від удачі.
+Для workers/retry потрібно `DB_POOL_MAX >= 2` (типове значення 10).
+
+`npm test` перевіряє retry-коди й ліміт спроб без БД.
+`npm run test:concurrency` на мігрованій БД перевіряє rollback при нестачі коштів,
+товару, помилці INSERT order/job, спільний баланс для різних товарів і повторне
+підхоплення задачі після падіння воркера. Усі DB-команди використовують наявний
+`scripts/with-secrets.sh dev`; нових env-файлів немає. Live Infisical не перевірений,
+оскільки облікового запису ще немає; acceptance виконується через `SKIP_VAULT=1`.
+
+Формат здачі: PR із гілки `hw-14`, посилання на PR у LMS.
 
 ## HW-13: entities та міграції
 
