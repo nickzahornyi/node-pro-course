@@ -16,10 +16,14 @@
     "api:up": "sh scripts/api-up.sh",
     "seed": "bash scripts/with-secrets.sh dev node dist/seed.js",
     "demo:nplus1": "bash scripts/with-secrets.sh dev node dist/demo-nplus1.js",
+    "demo:race": "bash scripts/with-secrets.sh dev node dist/demo-race.js",
+    "demo:workers": "bash scripts/with-secrets.sh dev node dist/demo-workers.js",
+    "demo:retry": "bash scripts/with-secrets.sh dev node dist/demo-retry.js",
+    "test:concurrency": "bash scripts/with-secrets.sh dev node --test integration/concurrency.test.js",
     "report": "bash scripts/with-secrets.sh dev node dist/report.js",
     "lint:api": "redocly lint openapi/openapi.yaml",
     "bundle:api": "redocly bundle openapi/openapi.yaml -o spec.json",
-    "test": "npm run build && node --test"
+    "test": "npm run build && node --test test/*.test.js"
   },
   "dependencies": {
     "@nestjs/common": "11.1.6",
