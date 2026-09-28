@@ -87,9 +87,9 @@ mv /tmp/marketplace.env .env
 npm run api:up
 ```
 
-Команда створює відсутній `secrets/db_password` із публічного dev-прикладу,
-але не перезаписує наявний, зокрема після ротації. Compose передає конфігурацію
-без `.env`. Прямий запуск профілю через Compose потребує вже підготовленого файла.
+Починаючи з HW-15, сервіс `credentials` створює відсутній пароль у named volume
+із публічного dev-прикладу, але не перезаписує наявний після ротації. Той самий
+ресурс читають Postgres, PgBouncer, bootstrap та API. `.env` і ручний secret не потрібні.
 
 Перевірка процесу та підключення до БД:
 
@@ -109,13 +109,15 @@ curl http://localhost:3000/health
 
 `rotate.sh` бере роль і назву БД з `DB_URL` сервісу `app` у результаті `docker compose config --format json` (включно з overrides). Для запуску скрипта потрібні Node.js, OpenSSL і Docker Compose. Скрипт змінює пароль ролі PostgreSQL, оновлює файл-секрет і закриває старі з'єднання. `pg.Pool` перечитує файл для кожного нового з'єднання, тому застосунок продовжує працювати, а `uptime_seconds` не обнуляється.
 
-Runtime-образ містить лише production-залежності, `dist`, OpenAPI та `.env.example`; процес працює як `node`. Compose монтує файл-секрет із хоста: режим `644` дозволяє читати його користувачу контейнера, а каталог `secrets` із режимом `700` закриває доступ іншим користувачам хоста. Під час ротації файл оновлюється на місці, щоб bind mount бачив новий вміст.
-
-Після `docker compose down -v` поверніть стартовий пароль у `secrets/db_password` перед наступним запуском:
-
-```bash
-printf '%s\n' 'marketplace-local-password' > secrets/db_password
-```
+Runtime-образ містить production-залежності, `dist`, OpenAPI та `.env.example`;
+процес працює як `node`. PostgreSQL-клієнт є лише в окремому target `ops`.
+У HW-15 секрет зберігається в `db_credentials` volume, змонтованому read-only в API
+та PgBouncer. Ротація оновлює пароль і runtime userlist, надсилає SIGHUP пулеру,
+не перезапускаючи API. Файли `644` потрібні різним UID усередині контейнерів;
+доступ до Docker/volume є привілейованим. Реальні секрети до репозиторію не потрапляють.
+Не видаляйте `db_credentials` окремо від `postgres_data`: збережений пароль має
+відповідати ролі БД. `docker compose down -v` видаляє обидва volumes і всі дані;
+на наступному старті credentials автоматично повертаються до dev-прикладу.
 
 ## Grading
 
@@ -125,14 +127,33 @@ printf '%s\n' 'marketplace-local-password' > secrets/db_password
 Після клону перейдіть у каталог сервісу: `cd marketplace`.
 Використовуйте чистий volume: **не запускайте db/schema.sql або db/seed.sql HW-12
 перед ORM-міграцією**. Для ізоляції від попередніх ДЗ можна задати
-`export COMPOSE_PROJECT_NAME=marketplace-hw14` перед командами нижче.
-Порт 5432 має бути вільним; для іншого порту задайте `DB_PUBLISHED_PORT` і
-той самий порт у `DB_URL`.
+`export COMPOSE_PROJECT_NAME=marketplace-hw15` перед командами нижче.
+Порти 5432 (Postgres, лише діагностика), 6432 (PgBouncer), 3000 (API) мають бути
+вільними. Overrides: `DB_PUBLISHED_PORT`, `PGBOUNCER_PUBLISHED_PORT`, `APP_PUBLISHED_PORT`.
+Порт у `DB_URL` має відповідати `PGBOUNCER_PUBLISHED_PORT`, не прямому Postgres.
+
+Мінімальний HW-15 шлях (Node.js 22+, Docker; локальні psql/pg_dump/npm ci не потрібні):
+
+```bash
+export DB_URL=postgresql://marketplace@127.0.0.1:6432/marketplace DB_PASSWORD=marketplace-local-password
+export SKIP_VAULT=1    # у грейдера немає доступу до сховища
+docker compose up -d --wait
+bash scripts/with-secrets.sh dev bash scripts/backup.sh
+bash scripts/with-secrets.sh dev bash scripts/restore-drill.sh
+```
+
+Compose збирає образи, створює dev-секрет, чекає PgBouncer, виконує всі міграції
+та ідемпотентний seed через одноразовий `bootstrap`, потім запускає API.
+Скрипти самі не викликають сховище: голий `bash scripts/backup.sh` / `restore-drill.sh`
+після export також працює. Restore офлайн: бере останній завершений локальний дамп,
+а не поточний стан source DB. Основний шлях — обгортка Infisical вище.
+
+Повний regression-прогін попередніх ДЗ:
 
 ```bash
 npm ci && npx tsc --noEmit
 docker compose up -d --wait
-export DB_URL=postgresql://marketplace@127.0.0.1:5432/marketplace DB_PASSWORD=marketplace-local-password
+export DB_URL=postgresql://marketplace@127.0.0.1:6432/marketplace DB_PASSWORD=marketplace-local-password
 export SKIP_VAULT=1    # у грейдера немає доступу до сховища
 npm run build
 npm run migrate
@@ -161,7 +182,76 @@ npm run test:concurrency
 Грейдер не потребує `.env`, `.secrets/`, CLI Infisical або ручного створення secret.
 База використовує публічний dev-пароль із `db/db_password.example`, змонтований
 у Postgres як `POSTGRES_PASSWORD_FILE`. Усі мережеві підключення все одно проходять
-парольну автентифікацію. HTTP-застосунок вмикається окремим профілем `api`.
+парольну автентифікацію. API і ORM підключаються через PgBouncer.
+
+## Data layer ops
+
+Конфіг у `pgbouncer/pgbouncer.ini`: transaction mode, 5 backend connections на
+пару user/database, до 200 клієнтів, admin user `marketplace`. У dev це та сама роль,
+що й застосунок; production потребує окремих least-privilege ролей і захищеної мережі.
+Порт 6432 опублікований лише на loopback. У `.env.example` URL указує на PgBouncer.
+У **Infisical dev і prod потрібно оновити існуючий `DB_URL`** на endpoint пулера
+(dev host-процеси: `127.0.0.1:6432`, Compose: `pgbouncer:6432`; prod — реальний DNS
+пулера). Пароль той самий, нових env-файлів немає. Live сховище недоступне в цьому
+середовищі, тому його значення автоматично не змінювалися.
+
+Transaction mode повертає backend connection у пул після COMMIT/ROLLBACK і дозволяє
+50 клієнтам race ділити 5 з'єднань. За межами однієї транзакції не можна покладатися
+на session `SET`, `LISTEN`, session advisory locks або тимчасові таблиці зі збереженням
+рядків між транзакціями. Використовуйте `SET LOCAL`, transaction advisory locks та
+окремий session/direct endpoint для session-залежних задач. SQL `PREPARE/EXECUTE`
+не стає безпечним від transaction pooling; protocol-level named statements підтримує
+`max_prepared_statements=200` у PgBouncer 1.25.2. Наш pg/TypeORM не задає query `name`.
+Джерела: [режими й обмеження](https://www.pgbouncer.org/features.html),
+[конфігурація](https://www.pgbouncer.org/config.html).
+
+Перевірка з хоста, якщо встановлений psql:
+
+```bash
+PGPASSWORD=marketplace-local-password psql -h 127.0.0.1 -p 6432 -U marketplace -d marketplace -c 'SELECT 1'
+PGPASSWORD=marketplace-local-password psql -h 127.0.0.1 -p 6432 -U marketplace -d pgbouncer -c 'SHOW POOLS'
+```
+
+Без локального psql: `docker compose exec pgbouncer sh -c 'PGPASSWORD=$(cat /run/secrets/db_password) psql -h 127.0.0.1 -p 6432 -U marketplace -d pgbouncer -c "SHOW POOLS"'`.
+
+Backup: команда з Grading друкує абсолютний шлях до датованого `.dump` у `backups/`
+на хості (gitignored). Змінити destination можна через `BACKUP_DIR=/absolute/path`.
+Ops-образ містить pg_dump/pg_restore 17. `pg_dump -Fc --snapshot=...` використовує
+snapshot, утримуваний окремою READ ONLY REPEATABLE READ транзакцією; з нього ж
+читаються контрольні count і sum. Тому concurrent checkout не дає хибного mismatch.
+Поруч лежить manifest із контрольними значеннями, розміром і SHA-256. Незавершені
+бекапи лишаються прихованими `.partial-*` та не потрапляють у drill; звичайна помилка
+прибирає staging. Дамп проходить `pg_restore --list` перед публікацією.
+Джерело механіки snapshot: [PostgreSQL pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html).
+
+Restore-drill вибирає останній bundle за UTC-часом і перевіряє checksum **до** запуску
+Postgres. Далі створює унікальний container і новий volume, перевіряє порожню public
+schema, виконує `pg_restore --no-owner --no-acl --single-transaction --exit-on-error`,
+порівнює counts усіх п'яти доменних таблиць і суми orders.total_cents, users.balance_cents,
+products.stock. Друкує MATCH лише при рівності; помилки дають exit != 0.
+Контейнер має `--network none`, без опублікованих портів; trust застосовується лише
+до цього ізольованого disposable Postgres. У finally видаляються лише створені ним
+container/volume; source DB і backup ніколи не видаляються. SIGINT/SIGTERM теж
+запускають cleanup (SIGKILL/збій Docker потребує ручного прибирання ресурсів з label
+`marketplace.restore-drill=true` для volume). JSON-протокол зберігається біля дампу.
+
+`npm run test:ops` (після `npm ci`, зі змінними Grading) перевіряє backup, два drill,
+навмисний mismatch, зіпсований checksum і відсутність залишених drill-volumes.
+Поточний ops-runner призначений для локального Compose і не приймає query-параметри
+URL; production TLS/certificate mounts потрібно налаштувати окремо, а не вважати
+перевіреними цим локальним drill.
+
+`backup.cron`: щодня о 02:00 у timezone cron-хоста. Перед встановленням замініть
+шлях `/absolute/path/marketplace`, задайте PATH для node/docker/infisical і machine
+identity Infisical для користувача cron. Файл не встановлює cron автоматично.
+Розрахунковий RPO — до 24 годин за умови успішних щоденних backup; пропуски
+збільшують його. Це не PITR і не offsite disaster recovery: локальний диск не захищає
+від втрати хоста. Виміряний RTO та розмір — у `RESTORE-DRILL.md`.
+
+Dev `bootstrap`/seed і публічний bootstrap-пароль — лише для курсового Compose.
+Production deployment не повинен автоматично запускати seed: міграції виконуються
+окремим job, credentials/TLS постачаються сховищем. Backup/drill не копіюють ролі,
+tablespaces чи секрети — це логічний дамп однієї бази, не повний backup кластера.
 
 ## Конкурентність
 

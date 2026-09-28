@@ -1,0 +1,4 @@
+# Install with crontab -e; replace /absolute/path/marketplace with this service directory.
+# Use an authenticated Infisical machine identity in the cron user's environment.
+# Server timezone; 02:00 every night. Not installed automatically by this repository.
+0 2 * * * cd /absolute/path/marketplace && /bin/bash scripts/with-secrets.sh dev /bin/bash scripts/backup.sh >> backup.log 2>&1
