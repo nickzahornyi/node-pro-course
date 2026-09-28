@@ -17,9 +17,9 @@ export async function runWorker(db: DataSource, workerId: string, orderIds?: str
     });
     if (claimed) { processed++; continue; }
     // Locked pending rows remain visible: empty SKIP LOCKED is not queue exhaustion.
-    const [{ pending }] = await db.query(`SELECT count(*)::int AS pending FROM jobs
-      WHERE status = 'pending' AND ($1::bigint[] IS NULL OR order_id = ANY($1))`, [orderIds ?? null]);
-    if (pending === 0) return processed;
+    const [{ pending }] = await db.query(`SELECT EXISTS (SELECT 1 FROM jobs
+      WHERE status = 'pending' AND ($1::bigint[] IS NULL OR order_id = ANY($1)) LIMIT 1) AS pending`, [orderIds ?? null]);
+    if (!pending) return processed;
     await delay(10);
   }
 }

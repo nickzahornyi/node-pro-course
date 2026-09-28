@@ -4,7 +4,7 @@ import { Order } from './order.entity.js';
 @Entity('jobs')
 @Index('jobs_order_id_key', ['orderId'], { unique: true })
 @Index('jobs_pending_idx', ['id'], { where: "status = 'pending'" })
-@Check('jobs_state_check', "(status = 'pending' AND processed = 0 AND worker_id IS NULL AND result IS NULL) OR (status = 'done' AND processed = 1 AND worker_id IS NOT NULL AND result IS NOT NULL)")
+@Check('jobs_state_check', "(status = 'pending' AND processed = 0 AND worker_id IS NULL AND result IS NULL) OR (status = 'done' AND processed >= 1 AND worker_id IS NOT NULL AND result IS NOT NULL)")
 export class Job {
   @PrimaryGeneratedColumn('identity', { type: 'bigint', generatedIdentity: 'ALWAYS' })
   id!: string;

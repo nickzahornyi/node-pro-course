@@ -5,6 +5,7 @@ import db from '../dist/data-source.js';
 import { checkout } from '../dist/checkout.js';
 import { createFixture, cleanupFixture } from '../dist/demo-fixture.js';
 import { runWorker } from '../dist/worker.js';
+import { ObservableJobProcessing1790550000000 } from '../dist/migrations/1790550000000-ObservableJobProcessing.js';
 
 before(() => db.initialize());
 after(() => db.destroy());
@@ -31,6 +32,7 @@ test('queue insert failure rolls back stock, debit, order and items', async () =
   const fixture = await createFixture(db, 1, '1000');
   try {
     const failingDb = { transaction: operation => db.transaction(manager => operation({
+      createQueryBuilder: () => manager.createQueryBuilder(),
       query: (sql, parameters) => {
         if (sql.startsWith('INSERT INTO jobs')) throw new Error('simulated queue insert failure');
         return manager.query(sql, parameters);
@@ -58,6 +60,25 @@ test('concurrent purchases of different products cannot overspend shared balance
     const [row] = await db.query(`SELECT balance_cents,
       (SELECT sum(stock)::int FROM products WHERE seller_id=$1) AS stock FROM users WHERE id=$1`, [fixture.buyerId]);
     assert.deepEqual(row, { balance_cents: '0', stock: 30 });
+  } finally { await cleanupFixture(db, fixture.buyerId); }
+});
+
+test('duplicate processing is observable instead of hidden by a constraint', async () => {
+  const fixture = await createFixture(db, 1);
+  try {
+    const orderId = await checkout(db, fixture.buyerId, fixture.productId);
+    assert.equal(await runWorker(db, 'first', [orderId]), 1);
+    assert.equal(await runWorker(db, 'second', [orderId]), 0);
+    // Simulate a buggy second completion; the metric must detect it, not a CHECK failure.
+    await db.query('UPDATE jobs SET processed = processed + 1 WHERE order_id=$1', [orderId]);
+    const [{ twice }] = await db.query(`SELECT count(*) FILTER (WHERE processed > 1)::int AS twice
+      FROM jobs WHERE order_id=ANY($1)`, [[orderId]]);
+    assert.equal(twice, 1);
+    await assert.rejects(db.transaction(manager =>
+      new ObservableJobProcessing1790550000000().down(manager.queryRunner)), e => e.code === '23514');
+    const [{ processed }] = await db.query('SELECT processed FROM jobs WHERE order_id=$1', [orderId]);
+    assert.equal(processed, 2, 'failed rollback must preserve duplicate evidence');
+    await assert.rejects(db.query('UPDATE jobs SET processed=0 WHERE order_id=$1', [orderId]), e => e.code === '23514');
   } finally { await cleanupFixture(db, fixture.buyerId); }
 });
 

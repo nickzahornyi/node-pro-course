@@ -152,9 +152,11 @@ npm test
 npm run test:concurrency
 ```
 
-Очікуються `[X] InitialMarketplace…` і `[X] CheckoutQueue…`, а після обох seed — `10 users`, `10 products`,
+Очікуються `[X] InitialMarketplace…`, `[X] CheckoutQueue…` і `[X] ObservableJobProcessing…`, а після обох seed — `10 users`, `10 products`,
 `10 orders`, `20 order_items`. `migrate:revert` відкочує останню міграцію:
-для HW-14 видаляє jobs і balance_cents, повторний revert видалить таблиці HW-13.
+спочатку повертає старий CHECK `processed = 1`, наступний revert видаляє jobs і balance_cents,
+ще один — таблиці HW-13. Якщо є `processed > 1`, перший revert відмовить без втрати
+діагностичних лічильників; такі записи потрібно спочатку дослідити.
 Виконуйте revert лише на тестовій БД: дані відкочених структур буде втрачено.
 Грейдер не потребує `.env`, `.secrets/`, CLI Infisical або ручного створення secret.
 База використовує публічний dev-пароль із `db/db_password.example`, змонтований
@@ -174,6 +176,8 @@ HW-14 додає `checkout` у `src/checkout.ts`, чергу `jobs` і `users.ba
 одночасно перевіряє залишок, блокує рядок і повертає актуальну ціну. Баланс
 списується аналогічно з умовою достатності коштів. В одному `db.transaction`
 через один manager виконуються обидва UPDATE, INSERT order, items і job.
+UPDATE і INSERT order використовують QueryBuilder із `.returning()` та `result.raw`,
+без залежності від різних форм результату `manager.query()` для цих операцій.
 Будь-яка помилка відкочує все; гроші обчислюються через BigInt, без float.
 Для майбутнього multi-product checkout потрібен однаковий порядок блокування товарів.
 
@@ -201,7 +205,11 @@ Race при пулі 50 також дав рівно 10 успіхів. Пере
 Воркер тримає `FOR UPDATE SKIP LOCKED` і транзакцію до завершення обробки;
 `result`, `status=done` і `processed=processed+1` комітяться разом. Порожня вибірка
 перевіряється окремим читанням pending: якщо задачі заблоковані іншими воркерами,
-воркер чекає та пробує знову. Це drain-worker для поточної черги, не постійний daemon.
+воркер чекає та пробує знову. Для цього використано `EXISTS (SELECT 1 ... LIMIT 1)`,
+а не підрахунок усіх pending. Це drain-worker для поточної черги, не постійний daemon.
+Міграція `ObservableJobProcessing1790550000000` дозволяє `processed >= 1` для done:
+захист від повторної обробки забезпечує worker, а не CHECK. Негативний інтеграційний
+тест навмисно встановлює `processed=2` і перевіряє, що метрика повторів дорівнює 1.
 Обробка демо — імітація 100 мс та запис чека в БД. Гарантія одного committed
 результату не поширюється автоматично на зовнішній SMTP/HTTP: для реальної відправки
 потрібні ідемпотентний одержувач або outbox. Після rollback callback може виконатися знову.
