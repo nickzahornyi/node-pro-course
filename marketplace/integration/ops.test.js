@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, cp, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
@@ -39,6 +39,22 @@ test('backup archive, repeated drill, mismatch and corruption are checked; no le
       assert.match(error.stderr, /Dump checksum mismatch/);
       return error.code !== 0;
     });
+    assert.equal(await volumes(), before);
+    // Restore the test archive, then prove failed backups do not trigger retention.
+    archive[0] ^= 1;
+    await writeFile(backup, archive);
+    const expired = join(directory, 'backup-2000-01-01T00-00-00.000Z-12345678');
+    await cp(dirname(backup), expired, { recursive: true });
+    await writeFile(join(expired, 'manifest.json'), JSON.stringify({ ...JSON.parse(original), createdAt: '2000-01-01T00:00:00Z' }));
+    await assert.rejects(exec('bash', ['scripts/backup.sh'], { env: { ...env, DB_PASSWORD: 'intentionally-wrong', BACKUP_RETENTION_DAYS: '1' } }));
+    await access(expired);
+    const directUrl = new URL(env.DB_URL || env.DATABASE_URL);
+    directUrl.port = env.DB_PUBLISHED_PORT || '5432';
+    const direct = await exec('bash', ['scripts/backup.sh'], { env: { ...env, DB_URL: directUrl.toString(), BACKUP_RETENTION_DAYS: '1' } });
+    assert.match(direct.stderr, /removed 1 completed/);
+    await assert.rejects(access(expired));
+    await access(backup); // Recent backups are retained too.
+    assert.match((await exec('bash', ['scripts/restore-drill.sh'], { env })).stdout, /MATCH/);
     assert.equal(await volumes(), before);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

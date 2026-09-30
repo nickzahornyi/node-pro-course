@@ -2,15 +2,9 @@ import pg from 'pg';
 import { mkdir, writeFile, rename, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { controlSql, run, sha256 } from './common.mjs';
+import { resolveSourceUrl } from './source-url.mjs';
 
-const url = new URL(process.env.DB_URL);
-if (!['postgres:', 'postgresql:'].includes(url.protocol)) throw new Error('Expected PostgreSQL DB_URL');
-if (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
-  if ((url.port || '5432') !== (process.env.LOCAL_PGBOUNCER_PORT || '6432')) {
-    throw new Error('Local DB_URL must point to the published PgBouncer port');
-  }
-  url.hostname = 'pgbouncer'; url.port = '6432';
-}
+const url = resolveSourceUrl(process.env.DB_URL);
 const password = process.env.DB_PASSWORD || decodeURIComponent(url.password);
 url.password = '';
 const env = { ...process.env, PGHOST: url.hostname, PGPORT: url.port || '5432',

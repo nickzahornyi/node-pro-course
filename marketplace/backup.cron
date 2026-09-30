@@ -1,4 +1,5 @@
 # Install with crontab -e; replace /absolute/path/marketplace with this service directory.
 # Use an authenticated Infisical machine identity in the cron user's environment.
 # Server timezone; 02:00 every night. Not installed automatically by this repository.
+# Successful backup also prunes completed bundles older than BACKUP_RETENTION_DAYS (default 7), keeping the newest.
 0 2 * * * cd /absolute/path/marketplace && /bin/bash scripts/with-secrets.sh dev /bin/bash scripts/backup.sh >> backup.log 2>&1

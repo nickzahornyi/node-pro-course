@@ -202,6 +202,8 @@ Transaction mode повертає backend connection у пул після COMMIT
 окремий session/direct endpoint для session-залежних задач. SQL `PREPARE/EXECUTE`
 не стає безпечним від transaction pooling; protocol-level named statements підтримує
 `max_prepared_statements=200` у PgBouncer 1.25.2. Наш pg/TypeORM не задає query `name`.
+Неактивний `server_reset_query = DISCARD ALL` прибрано; `server_reset_query_always`
+не вмикається. Конфіг не обіцяє очищення session-state між транзакціями.
 Джерела: [режими й обмеження](https://www.pgbouncer.org/features.html),
 [конфігурація](https://www.pgbouncer.org/config.html).
 
@@ -216,6 +218,20 @@ PGPASSWORD=marketplace-local-password psql -h 127.0.0.1 -p 6432 -U marketplace -
 
 Backup: команда з Grading друкує абсолютний шлях до датованого `.dump` у `backups/`
 на хості (gitignored). Змінити destination можна через `BACKUP_DIR=/absolute/path`.
+
+Backup підтримує як URL пулера, так і прямий Postgres: наприклад,
+`DB_URL=postgresql://marketplace@127.0.0.1:5432/marketplace bash scripts/backup.sh`.
+Для нестандартних портів використовуються `PGBOUNCER_PUBLISHED_PORT` і
+`DB_PUBLISHED_PORT` із Compose; застосунок продовжує працювати через пулер.
+
+Retention запускається лише після успішного backup: `BACKUP_RETENTION_DAYS=7`
+за замовчуванням (додатне ціле, можна змінити через environment/сховище).
+Завершені bundle старші за N днів за manifest.createdAt видаляються безповоротно;
+найновіший та щойно створений зберігаються завжди. `.partial-*`, symlinks,
+невалідні/неповні bundle та сторонні каталоги не видаляються. Список видалених
+імен друкується в stderr (у cron — backup.log). Невдалий backup нічого не прибирає.
+Retention не замінює моніторинг диска: неповні артефакти потребують ручного огляду.
+
 Ops-образ містить pg_dump/pg_restore 17. `pg_dump -Fc --snapshot=...` використовує
 snapshot, утримуваний окремою READ ONLY REPEATABLE READ транзакцією; з нього ж
 читаються контрольні count і sum. Тому concurrent checkout не дає хибного mismatch.

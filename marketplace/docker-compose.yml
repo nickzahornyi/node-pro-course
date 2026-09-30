@@ -81,6 +81,7 @@ services:
       target: ops
     environment:
       LOCAL_PGBOUNCER_PORT: ${PGBOUNCER_PUBLISHED_PORT:-6432}
+      LOCAL_POSTGRES_PORT: ${DB_PUBLISHED_PORT:-5432}
     volumes:
       - ${BACKUP_DIR:-./backups}:/backups
 
