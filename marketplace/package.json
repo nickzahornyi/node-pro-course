@@ -20,6 +20,7 @@
     "demo:workers": "bash scripts/with-secrets.sh dev node dist/demo-workers.js",
     "demo:retry": "bash scripts/with-secrets.sh dev node dist/demo-retry.js",
     "test:concurrency": "bash scripts/with-secrets.sh dev node --test integration/concurrency.test.js",
+    "test:ops": "bash scripts/with-secrets.sh dev node --test integration/ops.test.js",
     "report": "bash scripts/with-secrets.sh dev node dist/report.js",
     "lint:api": "redocly lint openapi/openapi.yaml",
     "bundle:api": "redocly bundle openapi/openapi.yaml -o spec.json",
