@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { readFile } from 'node:fs/promises';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import type { Env } from './config/env.schema.js';
 
 @Injectable()
@@ -18,7 +18,7 @@ export class DatabaseService implements OnModuleDestroy {
       user: decodeURIComponent(databaseUrl.username),
       database: decodeURIComponent(databaseUrl.pathname.slice(1)),
       max: config.get('DB_POOL_MAX', { infer: true }),
-      password: async () => (await readFile(passwordFile, 'utf8')).trim(),
+      password: async () => config.get('DB_PASSWORD', { infer: true }) ?? (await readFile(passwordFile, 'utf8')).trim(),
     });
     this.pool.on('error', (error) => {
       this.logger.warn(`PostgreSQL idle connection was closed: ${error.message}`);
@@ -31,5 +31,18 @@ export class DatabaseService implements OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.pool.end();
+  }
+
+  query(sql: string, parameters?: unknown[]) { return this.pool.query(sql, parameters); }
+
+  async transaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await operation(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
   }
 }

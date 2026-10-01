@@ -1,0 +1,49 @@
+name: Marketplace tests and contracts
+on:
+  pull_request:
+  push:
+    branches: [main, hw-16]
+permissions:
+  contents: read
+defaults:
+  run:
+    working-directory: marketplace
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: marketplace/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run test:integration && npm run test:integration
+      - run: npm run test:e2e
+  contract:
+    runs-on: ubuntu-latest
+    env:
+      PACT_BROKER_URL: ${{ secrets.PACT_BROKER_URL }}
+      PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+      CONSUMER_VERSION: ${{ github.sha }}
+      PROVIDER_VERSION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: marketplace/package-lock.json
+      - run: npm ci
+      - name: Require broker secrets (fail closed)
+        run: test -n "$PACT_BROKER_URL" && test -n "$PACT_BROKER_TOKEN"
+      - run: npm run test:contract
+      - name: Publish consumer contract
+        run: npm run pact:publish
+      - name: Verify real provider and publish verification result
+        run: npm run verify:provider
+      - name: can-i-deploy (only deployable true passes)
+        run: npm run pact:can-i-deploy
