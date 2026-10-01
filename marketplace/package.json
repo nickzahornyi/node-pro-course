@@ -21,6 +21,13 @@
     "demo:retry": "bash scripts/with-secrets.sh dev node dist/demo-retry.js",
     "test:concurrency": "bash scripts/with-secrets.sh dev node --test integration/concurrency.test.js",
     "test:ops": "bash scripts/with-secrets.sh dev node --test integration/ops.test.js",
+    "test:integration": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPatterns=test/integration",
+    "test:e2e": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPatterns=test/e2e",
+    "test:contract": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPatterns=test/contract",
+    "verify:provider": "npm run build && node test/contract/verify-provider.js",
+    "pact:publish": "node scripts/pact-broker.mjs publish",
+    "pact:tag-prod": "node scripts/pact-broker.mjs tag-prod",
+    "pact:can-i-deploy": "node scripts/pact-broker.mjs can-i-deploy",
     "report": "bash scripts/with-secrets.sh dev node dist/report.js",
     "lint:api": "redocly lint openapi/openapi.yaml",
     "bundle:api": "redocly bundle openapi/openapi.yaml -o spec.json",
@@ -30,6 +37,7 @@
     "@nestjs/common": "11.1.6",
     "@nestjs/config": "4.0.2",
     "@nestjs/core": "11.1.6",
+    "@nestjs/platform-express": "11.1.6",
     "express": "4.22.2",
     "express-openapi-validator": "5.6.2",
     "js-yaml": "4.1.0",
@@ -40,10 +48,16 @@
     "zod": "4.1.5"
   },
   "devDependencies": {
+    "@nestjs/testing": "11.1.6",
+    "@pact-foundation/pact": "17.1.4",
     "@redocly/cli": "2.46.0",
+    "@testcontainers/postgresql": "11.7.2",
     "@types/express": "5.0.3",
     "@types/node": "24.3.0",
     "@types/pg": "8.15.5",
+    "ajv": "8.17.1",
+    "jest": "30.5.2",
+    "supertest": "7.3.0",
     "tsx": "4.20.5",
     "typescript": "5.9.2"
   }

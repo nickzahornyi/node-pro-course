@@ -1,11 +1,13 @@
 # Marketplace API contract
 
-Для поточного ДЗ **HW-13 (TypeORM)** починайте з [Grading](#grading).
+Для поточного ДЗ **HW-16 (integration / E2E / Pact)** починайте з [Тестування](#тестування-hw-16).
 Усі npm/Compose-команди виконуються в `marketplace/` після клонування репозиторію.
 Розділ HW-12 нижче збережено як окремий SQL-стенд попереднього завдання.
 
 Домашнє завдання виконане за **варіантом Б — runtime-валідація на кордоні**.
-Express-застосунок використовує `express-openapi-validator` для перевірки запитів і відповідей за OpenAPI-спекою. Дані зберігаються in-memory і скидаються після перезапуску.
+Nest-застосунок використовує `express-openapi-validator` для перевірки запитів і відповідей за `openapi/openapi.yaml`. Товари, замовлення та ключі ідемпотентності зберігаються в PostgreSQL. Старий `src/app.ts` залишено лише для історичних unit-тестів; production entrypoint — `src/main.ts` → `AppModule`.
+
+Публічний POST `/orders` створює draft: початковий контракт не містить покупця чи оплати, тому використовується технічний гостьовий користувач, без списання балансу й запасів. Транзакційний оплачуваний checkout із HW-14 залишається окремим сценарієм `src/checkout.ts`. ID товару беріть із GET `/products` (після seed, наприклад, `1`).
 
 ## Встановлення і запуск
 
@@ -43,10 +45,82 @@ curl -i -X POST http://localhost:3000/orders \
 curl -i -X POST http://localhost:3000/orders \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: demo-1' \
-  -d '{"items":[{"product_id":"prod-1","quantity":2}]}'
+  -d '{"items":[{"product_id":"1","quantity":2}]}'
 ```
 
 Повтор того самого ключа з тим самим тілом повертає ту саму відповідь `201` і `Idempotency-Replay: true`. Повтор ключа з іншим тілом повертає `422 application/problem+json`.
+
+## Тестування HW-16
+
+Потрібні Node.js 22+, запущений Docker; усі команди — з `marketplace/`:
+
+```bash
+npm ci && npx tsc --noEmit
+npm run test:integration && npm run test:integration
+npm run test:e2e
+npm run test:contract
+npm run verify:provider
+```
+
+Перевірено 2026-10-01: integration **8/8 двічі**, E2E **4/4**, consumer **1/1**, provider **has a matching body (OK)**. Jest має `reporters: ['default']`, `maxWorkers: 1`, `watchman: false`; TypeScript компілюється через `tsc` зі справжніми decorator metadata.
+
+Ізоляція: кожен suite створює власний `PostgreSqlContainer('postgres:16-alpine')`, запускає реальні міграції й закриває пул та контейнер. Репозиторії приймають об'єкт із `query()`, тому кожний integration-кейс працює через один Client у BEGIN/ROLLBACK; E2E використовує TRUNCATE між кейсами, бо HTTP-запити мають власні транзакції. UUID-дефолти builders `aUser()` / `aProduct()` усувають конфлікти даних, повторний запуск не потребує очищення вручну.
+
+Покрито ProductsRepository і OrdersRepository (по 4 кейси), FK `23503`, case-insensitive UNIQUE `23505`, JOIN та SUM. E2E створює повний `Test.createTestingModule({ imports: [AppModule] })` без overrides: створення → читання після рестарту застосунку, 404, 400, конкурентний replay та 422. `configureApp()` спільний із production; DB_URL і DB_PASSWORD беруться з URI контейнера до імпорту AppModule, `.env` у тестах не читається.
+
+Consumer `MarketplaceWeb` запитує GET `/products/7` у `MarketplaceAPI`, provider state — `a product with ID 7 exists`. Шлях і JSON-відповідь автоматично звіряються з `openapi/openapi.yaml`; provider stateHandler засіває справжню БД через INSERT ON CONFLICT, а verifier звертається до реального Nest HTTP-сервера. `pacts/*.json` ігноруються Git: `test:contract` генерує їх локально й у CI перед verification.
+
+### Broker і локальний can-i-deploy
+
+Основний шлях для налаштованого Infisical: збережіть `PACT_BROKER_URL` та `PACT_BROKER_TOKEN` у dev/prod сховищі й запускайте `bash scripts/with-secrets.sh dev npm run verify:provider`. Обгортка HW-11 не змінена. Самого Infisical-проєкту тут ще немає: наведений нижче аварійний шлях грейдера використовує `SKIP_VAULT=1`; реальне отримання секретів зі сховища не перевірялося.
+
+Для демонстрації unknown потрібен новий брокер без попереднього prod-тега. Виберіть окремий, ще не використаний COMPOSE_PROJECT_NAME; не видаляйте volumes із потрібними даними. Порти 5432, 6432, 3000 та 9292 мають бути вільними (за потреби змініть `*_PUBLISHED_PORT`).
+
+```bash
+export COMPOSE_PROJECT_NAME=marketplace-hw16-demo
+docker compose up -d --wait
+export PACT_BROKER_URL=http://127.0.0.1:9292
+export CONSUMER_VERSION=hw16-20261001 PROVIDER_VERSION=hw16-20261001
+export SKIP_VAULT=1
+npm run test:contract
+curl --fail-with-body -i -X PUT \
+  "$PACT_BROKER_URL/pacts/provider/MarketplaceAPI/consumer/MarketplaceWeb/version/$CONSUMER_VERSION" \
+  -H 'Content-Type: application/json' \
+  --data-binary @pacts/MarketplaceWeb-MarketplaceAPI.json
+# HTTP 201; еквівалент із підтримкою env-токена: npm run pact:publish
+bash scripts/with-secrets.sh dev npm run verify:provider
+# publishVerificationResult: true; providerVersion = PROVIDER_VERSION
+npm run pact:can-i-deploy
+# очікуваний exit 1: deployable null, unknown 1
+curl --fail-with-body -i -X PUT \
+  "$PACT_BROKER_URL/pacticipants/MarketplaceAPI/versions/$PROVIDER_VERSION/tags/prod" \
+  -H 'Content-Type: application/json' --data '{}'
+# HTTP 201; еквівалент: npm run pact:tag-prod
+curl --fail-with-body \
+  "$PACT_BROKER_URL/can-i-deploy?pacticipant=MarketplaceWeb&version=$CONSUMER_VERSION&to=prod"
+npm run pact:can-i-deploy
+# exit 0 лише коли summary.deployable === true
+```
+
+Реальний локальний прогін 2026-10-01 (`marketplace-hw16-contract`, порт 59292): publish → HTTP 201, verification → exit 0, results published. До prod-тега, exit 1:
+
+```json
+{"summary":{"deployable":null,"reason":"There is no verified pact between version hw16-20261001 of MarketplaceWeb and the latest version of MarketplaceAPI with tag prod (no such version exists)","success":0,"failed":0,"unknown":1}}
+```
+
+Тег провайдера → HTTP 201; після тега, exit 0:
+
+```json
+{"summary":{"deployable":true,"reason":"All required verification results are published and successful","success":1,"failed":0,"unknown":0}}
+```
+
+Без `PACT_BROKER_URL` verifier перевіряє локальний згенерований pact без публікації. З URL — читає контракт із брокера та публікує результат. Токен читається лише з `process.env.PACT_BROKER_TOKEN`; локальний compose-брокер без автентифікації слухає тільки loopback і не призначений для публічного розгортання.
+
+### CI та здача
+
+`../.github/workflows/contracts.yml` містить jobs `tests` і `contract`; останній виконує consumer → publish → verify із `publishVerificationResult: true` → `can-i-deploy`. Налаштуйте GitHub secrets `PACT_BROKER_URL` та `PACT_BROKER_TOKEN` для брокера, доступного runner-у; без них job навмисно падає. `prod`-тег має позначати реально розгорнуту версію провайдера: CI не виставляє його автоматично заради зеленого гейта.
+
+Локальний еквівалент перевірено, але віддалений GitHub Actions і Infisical не запускалися: потрібні ваші облікові дані. Зміни підготовлено у гілці `hw-16`; commit/push/PR потрібно зробити перед здачею посилання в LMS.
 
 ## Configuration
 
@@ -56,8 +130,8 @@ curl -i -X POST http://localhost:3000/orders \
 | --- | --- | --- |
 | `NODE_ENV` | ні, `development` | Режим виконання |
 | `PORT` | ні, `3000` | HTTP-порт, ціле число 1–65535 |
-| `DB_URL` | так | PostgreSQL URL без пароля. ORM: сховище Infisical dev/prod → process.env або CI environment. Старий HTTP-застосунок: локальний `.env` / runtime environment Compose. |
-| `DB_PASSWORD` | ні | Пароль ORM зі сховища Infisical або CI; якщо відсутній, ORM перечитує `DB_PASSWORD_FILE` на кожне з'єднання. |
+| `DB_URL` | так | PostgreSQL URL без пароля. Сховище Infisical dev/prod → process.env або CI environment; локально `.env` / runtime environment Compose. У тестах URI видає testcontainer. |
+| `DB_PASSWORD` | ні | Пароль зі сховища Infisical або CI; якщо відсутній, ORM та HTTP-пул перечитують `DB_PASSWORD_FILE` на кожне нове з'єднання. |
 | `DB_PASSWORD_FILE` | ні, `/run/secrets/db_password` | Шлях до файла з паролем БД |
 | `DB_POOL_MAX` | ні, `10` | Максимальний розмір пулу з'єднань |
 | `NPLUS1_SIZES` | ні, `5,10` | Щонайменше два різні розміри вибірки, цілі числа 1–10000 через кому |
@@ -123,6 +197,8 @@ Runtime-образ містить production-залежності, `dist`, OpenA
 
 `cd marketplace` — перша команда після клону репозиторію; усі команди нижче виконуються в цьому каталозі з `package.json`.
 
+Для поточного завдання виконайте [Тестування HW-16](#тестування-hw-16). GitHub workflow знаходиться у корені Git-репозиторію: `../.github/workflows/contracts.yml`, із `working-directory: marketplace`. Наступні інструкції збережені для регресії попередніх ДЗ.
+
 Потрібні Node.js 22+ і Docker Compose з підтримкою `--wait`.
 Після клону перейдіть у каталог сервісу: `cd marketplace`.
 Використовуйте чистий volume: **не запускайте db/schema.sql або db/seed.sql HW-12
@@ -175,7 +251,7 @@ npm run test:concurrency
 
 Очікуються `[X] InitialMarketplace…`, `[X] CheckoutQueue…` і `[X] ObservableJobProcessing…`, а після обох seed — `10 users`, `10 products`,
 `10 orders`, `20 order_items`. `migrate:revert` відкочує останню міграцію:
-спочатку повертає старий CHECK `processed = 1`, наступний revert видаляє jobs і balance_cents,
+спочатку видаляє `order_requests` (HW-16), наступний повертає старий CHECK `processed = 1`, наступний revert видаляє jobs і balance_cents,
 ще один — таблиці HW-13. Якщо є `processed > 1`, перший revert відмовить без втрати
 діагностичних лічильників; такі записи потрібно спочатку дослідити.
 Виконуйте revert лише на тестовій БД: дані відкочених структур буде втрачено.

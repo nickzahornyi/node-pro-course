@@ -7,3 +7,5 @@ secrets/
 .DS_Store
 spec.json
 backups/
+pacts/
+logs/
