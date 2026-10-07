@@ -1,6 +1,6 @@
 # Marketplace API contract
 
-Для поточного ДЗ **HW-16 (integration / E2E / Pact)** починайте з [Тестування](#тестування-hw-16).
+Для поточного ДЗ **HW-18 (WebSocket / SSE)** починайте з [Realtime](#realtime-hw-18).
 Усі npm/Compose-команди виконуються в `marketplace/` після клонування репозиторію.
 Розділ HW-12 нижче збережено як окремий SQL-стенд попереднього завдання.
 
@@ -8,6 +8,105 @@
 Nest-застосунок використовує `express-openapi-validator` для перевірки запитів і відповідей за `openapi/openapi.yaml`. Товари, замовлення та ключі ідемпотентності зберігаються в PostgreSQL. Старий `src/app.ts` залишено лише для історичних unit-тестів; production entrypoint — `src/main.ts` → `AppModule`.
 
 Публічний POST `/orders` створює draft: початковий контракт не містить покупця чи оплати, тому використовується технічний гостьовий користувач, без списання балансу й запасів. Транзакційний оплачуваний checkout із HW-14 залишається окремим сценарієм `src/checkout.ts`. ID товару беріть із GET `/products` (після seed, наприклад, `1`).
+
+## Realtime HW-18
+
+Команди виконуються з `marketplace/` у гілці `hw-18`; потрібні Node.js 22+ та Docker Desktop. Підніміть окремий стенд із чистими volumes, щоб seed-користувачі 1 і 2 володіли відповідно замовленнями 1 і 2. На вже заповненій БД ID можуть відрізнятися: задайте `REALTIME_ORDER_A/B` і `REALTIME_USER_A/B` за фактичними `orders.id/user_id`.
+
+```bash
+cd marketplace
+npm ci && npx tsc --noEmit
+export COMPOSE_PROJECT_NAME=marketplace-hw18
+docker compose up -d --build --wait app
+curl --fail http://localhost:3000/db-health
+```
+
+Compose виконує міграції та seed, а `credentials` генерує випадковий HMAC-ключ `realtime_auth_secret` один раз у named volume. Ключ змонтований read-only в API й зберігається після рестарту. Для локального процесу використовуйте `.env.example` → `.env`, власний `AUTH_SECRET` (32+ символи) або `AUTH_SECRET_FILE`, `npm run build && node dist/main.js`; у dev-режимі `npm run build:watch` компілює зміни через tsc, а `npm run start:dev` в іншому терміналі запускає Node зі спостереженням за `dist`.
+
+Повноцінний login ще поза межами цього ДЗ: токени видає оператор через CLI всередині контейнера, після перевірки існування користувача. Публічного endpoint для їх видачі немає. Формат токена — підписаний HMAC-SHA256 identity payload (`sub`, `aud`, `exp`), строк дії одна година; API перевіряє підпис та строк, а потім звіряє `orders.user_id`. Самого `user_id` у заголовку чи join-повідомленні недостатньо для доступу. Для production ключ надходить із secret-ресурсу або сховища, а identity потрібно інтегрувати з login/IdP.
+
+```bash
+export TOKEN_A="$(docker compose exec -T app node dist/realtime/issue-token.js 1)"
+export TOKEN_B="$(docker compose exec -T app node dist/realtime/issue-token.js 2)"
+```
+
+HTTP-потоки потребують `Authorization: Bearer <token>`; Socket.IO — `auth: { token }`. Анонімний отримує 401 / `connect_error: Unauthorized`; власник іншого замовлення — 403 / join-ack `{ok:false,status:403}`. Токени не передаються у query string. Після закінчення строку дії відкриті WS/SSE-з'єднання закриваються; для продовження потрібен новий токен.
+
+### Події та зміна статусу
+
+```bash
+# Термінал 1: потік майбутніх подій (потрібен експорт TOKEN_A у цьому терміналі)
+curl -sN --max-time 30 -H "Authorization: Bearer $TOKEN_A" \
+  http://localhost:3000/orders/1/events
+
+# Термінал 2: зміна через HTTP, після якої подія з'явиться в терміналі 1
+curl --fail-with-body -X PATCH http://localhost:3000/orders/1/status \
+  -H "Authorization: Bearer $TOKEN_A" -H 'Content-Type: application/json' \
+  -d '{"status":"paid"}'
+```
+
+`PATCH /orders/:id/status` викликає `OrderStatusService`: транзакція з `SELECT … FOR UPDATE` перевіряє власника й оновлює статус. Лише після COMMIT сервіс публікує одну подію в `OrderEventsService`; незмінний статус та rollback не створюють події. Операції commit→publish впорядковані для одного замовлення в одному процесі. Це навчальна зміна статусу, а не платіжна операція чи повернення грошей; вона дозволяє повторні переходи між `pending`, `paid`, `shipped`, `cancelled`. GET повертає актуальний статус; тільки `pending` зберігає початкову публічну назву `created`.
+
+Gateway слухає ту саму шину й виконує `server.to('orders:<id>').emit('order.status', event)`. Join підтримує `{order_id:'1'}` або рядок `'1'`; ack `{ok:true,room:'orders:1'}` надходить після перевірки власника та входу в кімнату. SSE фільтрує ту саму подію за order_id:
+
+```text
+retry: 1000
+
+id: 1
+event: order.status
+data: {"order_id":"1","previous_status":"pending","status":"paid","id":1,"occurred_at":"2026-10-07T10:00:00.000Z"}
+```
+
+SSE встановлює `text/event-stream`, `Cache-Control: no-cache, no-transform`, `X-Accel-Buffering: no`, heartbeat кожні 15 секунд. ID глобально зростає в межах одного процесу; на реконекті `Last-Event-ID` повертає лише події цього замовлення з більшими ID, потім потік продовжується наживо. Зберігаються останні 500 подій: застарілий cursor повертає 410, cursor попереду поточної історії — 400. Після рестарту буфер та нумерація починаються заново, тому слід перечитати стан і підписатися без cursor; довговічне відновлення потребує persistent event log/outbox.
+
+### Перевірки грейдера
+
+```bash
+# Заголовок (curl завершує нескінченний потік через таймаут, exit 28 очікуваний)
+curl -sN --max-time 2 -D - -o /dev/null \
+  -H "Authorization: Bearer $TOKEN_A" http://localhost:3000/orders/1/events
+
+# Щонайменше чотири реальні зміни за будь-якого початкового статусу
+# (лише перший PATCH може виявитися no-op)
+for status in pending paid shipped pending cancelled; do
+  curl --fail-with-body -s -X PATCH http://localhost:3000/orders/1/status \
+    -H "Authorization: Bearer $TOKEN_A" -H 'Content-Type: application/json' \
+    -d "{\"status\":\"$status\"}"
+done
+
+# На чистому процесі перший пропущений id > 3 (за наведеним порядком — 4)
+curl -sN --max-time 2 -H "Authorization: Bearer $TOKEN_A" \
+  -H 'Last-Event-ID: 3' http://localhost:3000/orders/1/events
+
+node scripts/realtime-demo.mjs
+# A_RECEIVED=1 / B_RECEIVED=0 / exit 0
+node scripts/realtime-demo.mjs --same-room
+# A_RECEIVED=1 / B_RECEIVED=1 / exit 0
+
+npm run test:realtime
+npm run test:e2e
+npm test
+```
+
+Демо саме отримує токени користувачів через CLI поточного Compose-стенда, підключає два незалежні клієнти, чекає join-ack, виконує PATCH і рахує лише отримані події з повернутим `event_id`. У `--same-room` другий сокет використовує identity власника A, щоб обидва входи були дозволені. Скрипт має обмежені таймаути й сам закриває сокети; неправильні counts або HTTP/join-помилка дають exit 1. Для API поза Compose задайте `REALTIME_URL`, `REALTIME_ORDER_A/B`, `REALTIME_TOKEN_A/B`; секрет підпису клієнтам не потрібен.
+
+`test/e2e/realtime.spec.js` працює на PostgreSQL 16 у testcontainer та повному AppModule: обидва прогони реального demo, auth/ownership, ідентичний payload у двох транспортів, replay без дублів, rollback/no-op та конкурентний порядок. Unit-тести перевіряють підробку/прострочення токена і межі буфера. HTTP-контракт нових маршрутів та SSE payload описані в `openapi/openapi.yaml`.
+
+Перевірено 2026-10-07: `npm ci` та `tsc --noEmit` — exit 0; realtime 7/7 (повний E2E 11/11), integration 8/8, unit 35/35, Pact consumer 1/1 та provider verification OK. Docker-стенд пройшов обидва demo: `A_RECEIVED=1/B_RECEIVED=0` і `A_RECEIVED=1/B_RECEIVED=1`, обидва exit 0. Реальний curl показав `Content-Type: text/event-stream; charset=utf-8`, live frame з `id: 7`, `event: order.status`, JSON `status: pending`; після `Last-Event-ID: 3` — ID `4,5,6,7` без дублів. Таблиця trade-offs проходить awk-перевірку (1 роздільник, 7 рядків із `|`), workflow — `actionlint` exit 0.
+
+## Trade-offs: WebSocket vs SSE
+
+| Критерій | WebSocket / Socket.IO | SSE |
+| --- | --- | --- |
+| Напрям каналу | Двосторонній: клієнт надсилає join та інші повідомлення, сервер пушить події. | Сервер → клієнт; зміна статусу виконується звичайним HTTP PATCH. |
+| Реконект / відновлення | Socket.IO реконектиться, але потрібно повторити join; у цьому ДЗ WS не має replay. | EventSource реконектиться та передає Last-Event-ID; наш буфер відновлює пропущені події. |
+| Інфраструктура | Проксі має підтримувати HTTP Upgrade; rooms/адаптер потрібно узгоджувати між інстансами. | Звичайний довгий HTTP-response; потрібно вимкнути proxy buffering та налаштувати idle timeout. HTTP/2 зменшує обмеження кількості з'єднань. |
+| Ціна на подію | Невеликий бінарний framing WebSocket, додатковий Socket.IO envelope; одне постійне з'єднання. | Текстові поля id/event/data на кожну подію; одне постійне з'єднання, без нового HTTP-запиту на кожен статус. |
+| Авторизація браузера | Socket.IO передає token у handshake auth. | Нативний EventSource не має довільних Authorization headers: для продакшну потрібні HttpOnly cookie або fetch-based SSE, як у наших тестах. |
+
+Для односторонніх нотифікацій статусу я залишив би SSE: клієнт змінює дані через HTTP, а сервер передає події з простим cursor-відновленням. WebSocket виправданий, коли з'являться двосторонні команди або інтенсивний обмін. При двох інстансах локальні rooms і SSE-буфери розходяться: Socket.IO Redis adapter поширює WS-події, спільний pub/sub живить SSE на кожному інстансі, а durable event log/outbox із глобальними ID потрібний для replay та захисту від втрати між commit і publish.
+
+Джерела: [Nest gateways](https://docs.nestjs.com/websockets/gateways), [SSE формат та Last-Event-ID](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events).
 
 ## Встановлення і запуск
 
@@ -137,6 +236,8 @@ npm run pact:can-i-deploy
 | `DB_URL` | так | PostgreSQL URL без пароля. Сховище Infisical dev/prod → process.env або CI environment; локально `.env` / runtime environment Compose. У тестах URI видає testcontainer. |
 | `DB_PASSWORD` | ні | Пароль зі сховища Infisical або CI; якщо відсутній, ORM та HTTP-пул перечитують `DB_PASSWORD_FILE` на кожне нове з'єднання. |
 | `DB_PASSWORD_FILE` | ні, `/run/secrets/db_password` | Шлях до файла з паролем БД |
+| `AUTH_SECRET_FILE` | ні, `/run/secrets/realtime_auth_secret` | Файл ключа підпису realtime identity; Compose генерує випадковий ключ у credentials volume |
+| `AUTH_SECRET` | ні | Env-override ключа підпису, мінімум 32 символи; випадковий у тестах, зі сховища у production |
 | `DB_POOL_MAX` | ні, `10` | Максимальний розмір пулу з'єднань |
 | `NPLUS1_SIZES` | ні, `5,10` | Щонайменше два різні розміри вибірки, цілі числа 1–10000 через кому |
 
@@ -201,7 +302,7 @@ Runtime-образ містить production-залежності, `dist`, OpenA
 
 `cd marketplace` — перша команда після клону репозиторію; усі команди нижче виконуються в цьому каталозі з `package.json`.
 
-Для поточного завдання виконайте [Тестування HW-16](#тестування-hw-16). GitHub workflow знаходиться у корені Git-репозиторію: `../.github/workflows/contracts.yml`, із `working-directory: marketplace`. Наступні інструкції збережені для регресії попередніх ДЗ.
+Для поточного завдання виконайте [Realtime HW-18](#realtime-hw-18), для попереднього — [Тестування HW-16](#тестування-hw-16). GitHub workflow знаходиться у корені Git-репозиторію: `../.github/workflows/contracts.yml`, із `working-directory: marketplace`. Наступні інструкції збережені для регресії попередніх ДЗ.
 
 Потрібні Node.js 22+ і Docker Compose з підтримкою `--wait`.
 Після клону перейдіть у каталог сервісу: `cd marketplace`.
@@ -577,4 +678,4 @@ docker compose exec -T db psql -X -U marketplace -d marketplace -c 'SELECT index
 q1 вибирає замовлення за березень 2026; q3 шукає товар за `lower(name)`.
 Фактичні плани й час виконання: [OPTIMIZATIONS](db/OPTIMIZATIONS.md).
 Схема й seed застосовуються один раз до порожньої БД; seed закінчується `VACUUM (ANALYZE)`.
-Існуючі HTTP-обробники залишаються in-memory; `/db-health` перевіряє реальну БД.
+Історичний `src/app.ts` із in-memory даними використовується тільки в unit-тестах; поточний Nest HTTP API (HW-16/18) працює з PostgreSQL, а `/db-health` перевіряє з'єднання з БД.
