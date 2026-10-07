@@ -1,4 +1,37 @@
 services:
+  pact-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pact
+      POSTGRES_PASSWORD: pact-local-only
+      POSTGRES_DB: pact
+    volumes:
+      - pact_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U pact -d pact"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  pact-broker:
+    image: pactfoundation/pact-broker@sha256:420341d4fbfb00a621c313f47e530ad75703f969bbc7520d0d72bc71bb53cef9
+    environment:
+      PACT_BROKER_DATABASE_ADAPTER: postgres
+      PACT_BROKER_DATABASE_HOST: pact-db
+      PACT_BROKER_DATABASE_NAME: pact
+      PACT_BROKER_DATABASE_USERNAME: pact
+      PACT_BROKER_DATABASE_PASSWORD: pact-local-only
+    depends_on:
+      pact-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PACT_BROKER_PUBLISHED_PORT:-9292}:9292"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9292/diagnostic/status/heartbeat"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
   credentials:
     image: postgres:17-alpine
     user: "0:0"
@@ -114,5 +147,6 @@ secrets:
     file: ./db/db_password.example
 
 volumes:
+  pact_data:
   postgres_data:
   db_credentials:
