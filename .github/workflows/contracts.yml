@@ -25,9 +25,36 @@ jobs:
       - run: npm run test:e2e
   contract:
     runs-on: ubuntu-latest
+    services:
+      pact-db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pact
+          POSTGRES_PASSWORD: pact-local-only
+          POSTGRES_DB: pact
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U pact -d pact"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      pact-broker:
+        image: pactfoundation/pact-broker@sha256:420341d4fbfb00a621c313f47e530ad75703f969bbc7520d0d72bc71bb53cef9
+        env:
+          PACT_BROKER_DATABASE_ADAPTER: postgres
+          PACT_BROKER_DATABASE_HOST: pact-db
+          PACT_BROKER_DATABASE_NAME: pact
+          PACT_BROKER_DATABASE_USERNAME: pact
+          PACT_BROKER_DATABASE_PASSWORD: pact-local-only
+        ports:
+          - 9292:9292
+        options: >-
+          --health-cmd "wget -q -O /dev/null http://127.0.0.1:9292/diagnostic/status/heartbeat"
+          --health-interval 3s --health-timeout 5s --health-retries 40
+          --health-start-period 10s
     env:
-      PACT_BROKER_URL: ${{ secrets.PACT_BROKER_URL }}
+      PACT_BROKER_URL: ${{ secrets.PACT_BROKER_URL || 'http://127.0.0.1:9292' }}
       PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+      LOCAL_BROKER: ${{ secrets.PACT_BROKER_URL == '' }}
+      SKIP_VAULT: '1'
+      COMPOSE_PROJECT_NAME: marketplace-contract-ci
       CONSUMER_VERSION: ${{ github.sha }}
       PROVIDER_VERSION: ${{ github.sha }}
     steps:
@@ -38,12 +65,32 @@ jobs:
           cache: npm
           cache-dependency-path: marketplace/package-lock.json
       - run: npm ci
-      - name: Require broker secrets (fail closed)
-        run: test -n "$PACT_BROKER_URL" && test -n "$PACT_BROKER_TOKEN"
       - run: npm run test:contract
       - name: Publish consumer contract
         run: npm run pact:publish
       - name: Verify real provider and publish verification result
-        run: npm run verify:provider
+        run: bash scripts/with-secrets.sh dev npm run verify:provider
+      - name: Fresh local broker rejects deployment without prod version
+        if: env.LOCAL_BROKER == 'true'
+        run: |
+          curl --fail-with-body --silent --show-error \
+            "$PACT_BROKER_URL/can-i-deploy?pacticipant=MarketplaceWeb&version=$CONSUMER_VERSION&to=prod" \
+            | node --input-type=module -e 'let body=""; for await (const chunk of process.stdin) body+=chunk; const {summary}=JSON.parse(body); console.log(summary); if(summary.deployable!==null || summary.unknown!==1) process.exit(1);'
+          if npm run pact:can-i-deploy; then
+            echo 'Expected unknown gate before the first deployment' >&2
+            exit 1
+          fi
+      - name: Deploy provider to isolated CI environment
+        if: env.LOCAL_BROKER == 'true'
+        run: |
+          docker compose up -d --build --wait app
+          curl --fail-with-body http://127.0.0.1:3000/db-health
+          curl --fail-with-body http://127.0.0.1:3000/products/7
+      - name: Record deployed provider version in isolated broker
+        if: env.LOCAL_BROKER == 'true'
+        run: npm run pact:tag-prod
       - name: can-i-deploy (only deployable true passes)
         run: npm run pact:can-i-deploy
+      - name: Stop isolated deployment
+        if: always() && env.LOCAL_BROKER == 'true'
+        run: docker compose down --volumes

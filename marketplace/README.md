@@ -72,7 +72,7 @@ Consumer `MarketplaceWeb` запитує GET `/products/7` у `MarketplaceAPI`, 
 
 ### Broker і локальний can-i-deploy
 
-Основний шлях для налаштованого Infisical: збережіть `PACT_BROKER_URL` та `PACT_BROKER_TOKEN` у dev/prod сховищі й запускайте `bash scripts/with-secrets.sh dev npm run verify:provider`. Обгортка HW-11 не змінена. Самого Infisical-проєкту тут ще немає: наведений нижче аварійний шлях грейдера використовує `SKIP_VAULT=1`; реальне отримання секретів зі сховища не перевірялося.
+Штатний режим цього навчального стенда й CI — `SKIP_VAULT=1`: конфігурація надходить через environment, а `bash scripts/with-secrets.sh dev npm run verify:provider` запускає команду з цими значеннями. Infisical-проєкт ще не налаштовано, тому отримання секретів зі сховища не перевірялося. Для підключення HW-11 збережіть `PACT_BROKER_URL` та `PACT_BROKER_TOKEN` у dev/prod сховищі й приберіть `SKIP_VAULT=1`; та сама обгортка тоді викликає `infisical run`. Це зберігає передбачений завданням шлях через сховище для звичайного запуску з реальними секретами.
 
 Для демонстрації unknown потрібен новий брокер без попереднього prod-тега. Виберіть окремий, ще не використаний COMPOSE_PROJECT_NAME; не видаляйте volumes із потрібними даними. Порти 5432, 6432, 3000 та 9292 мають бути вільними (за потреби змініть `*_PUBLISHED_PORT`).
 
@@ -118,9 +118,13 @@ npm run pact:can-i-deploy
 
 ### CI та здача
 
-`../.github/workflows/contracts.yml` містить jobs `tests` і `contract`; останній виконує consumer → publish → verify із `publishVerificationResult: true` → `can-i-deploy`. Налаштуйте GitHub secrets `PACT_BROKER_URL` та `PACT_BROKER_TOKEN` для брокера, доступного runner-у; без них job навмисно падає. `prod`-тег має позначати реально розгорнуту версію провайдера: CI не виставляє його автоматично заради зеленого гейта.
+`../.github/workflows/contracts.yml` містить jobs `tests` і `contract`. Job `contract` піднімає PostgreSQL та Pact Broker через `services`, виконує consumer → publish → verify із `publishVerificationResult: true` → `can-i-deploy`. Без GitHub secrets використовується тимчасовий брокер runner-а на 127.0.0.1:9292: спочатку гейт має відмовити, потім Compose розгортає API, перевіряються `/db-health` і `/products/7`, і лише після цього тегується розгорнутий PROVIDER_VERSION та перевіряється позитивний гейт. `prod` тут — демонстраційний тег ізольованого CI-брокера; цей запуск не є деплоєм у зовнішній production. Тимчасовий deployment очищається через `always()`.
 
-Локальний еквівалент перевірено, але віддалений GitHub Actions і Infisical не запускалися: потрібні ваші облікові дані. Зміни підготовлено у гілці `hw-16`; commit/push/PR потрібно зробити перед здачею посилання в LMS.
+Для постійного зовнішнього брокера задайте GitHub secrets `PACT_BROKER_URL` та `PACT_BROKER_TOKEN`. Тоді CI публікує й перевіряє контракт у ньому, а локальні deploy/tag кроки пропускає: `prod` позначає версію, яку ваш production deployment вже успішно розгорнув. Після успішного зовнішнього деплою та healthcheck виконайте `PROVIDER_VERSION=<SHA розгорнутої версії> npm run pact:tag-prod` з URL і токеном цього брокера; без перевіреної сумісності гейт лишається червоним.
+
+Локальний еквівалент перевірено; віддалений GitHub Actions ще потрібно запустити після push. Навчальний CI більше не потребує облікових даних брокера; зовнішній брокер і Infisical потребують ваших налаштувань. Зміни підготовлено у гілці `hw-16`; commit/push/PR потрібно зробити перед здачею посилання в LMS.
+
+Повторна перевірка 2026-10-07: `actionlint` — exit 0; окремий Compose-стенд `marketplace-hw16-review-20261007`, брокер :59412, версія `hw16-review-20261007`: consumer 1/1, publish 201, verification через `SKIP_VAULT=1` — exit 0 з публікацією результату; до тега `deployable: null, unknown: 1` і exit 1. API `/db-health` та `/products/7` — HTTP 200; tag-prod 201; після тега `deployable: true, unknown: 0` і exit 0.
 
 ## Configuration
 
