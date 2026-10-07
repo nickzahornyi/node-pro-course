@@ -119,7 +119,99 @@ paths:
           $ref: '#/components/responses/NotFound'
         default:
           $ref: '#/components/responses/UnexpectedError'
+  /orders/{orderId}/status:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    patch:
+      operationId: changeOrderStatus
+      summary: Change an owned order status
+      description: Updates status in a transaction and publishes order.status only after commit. Repeating the current status emits no event. This educational status setter does not perform payment or refund accounting.
+      security:
+        - RealtimeBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status:
+                  $ref: '#/components/schemas/OrderStatus'
+      responses:
+        '200':
+          description: Committed change (or unchanged status).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [order_id, previous_status, status, changed, event_id]
+                properties:
+                  order_id: { type: string }
+                  previous_status:
+                    $ref: '#/components/schemas/OrderStatus'
+                  status:
+                    $ref: '#/components/schemas/OrderStatus'
+                  changed: { type: boolean }
+                  event_id: { type: integer, minimum: 1, nullable: true }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /orders/{orderId}/events:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    get:
+      operationId: streamOrderEvents
+      summary: Subscribe to an owned order status stream
+      description: SSE frames contain id, event order.status, and JSON data with the OrderStatusEvent shape. Last-Event-ID replays retained events strictly greater than the cursor. Without the header only future changes are sent. The last 500 events are retained per process; expired replay history returns 410 and a cursor ahead of history returns 400.
+      security:
+        - RealtimeBearer: []
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          description: Last received event ID; replay is scoped to the authenticated order.
+          schema:
+            type: string
+            pattern: '^\d+$'
+      responses:
+        '200':
+          description: Continuous SSE text frames; JSON data follows OrderStatusEvent.
+          content:
+            text/event-stream:
+              schema: { type: string }
+              x-event-data-schema:
+                $ref: '#/components/schemas/OrderStatusEvent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Replay history was evicted; read the current order and resubscribe.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
 components:
+  securitySchemes:
+    RealtimeBearer:
+      type: http
+      scheme: bearer
+      description: Operator-issued, expiring HMAC-signed identity token. For Socket.IO supply this same token in handshake.auth.token.
   parameters:
     Limit:
       name: limit
@@ -152,6 +244,18 @@ components:
       schema:
         type: string
   responses:
+    Unauthorized:
+      description: Missing, invalid or expired identity token.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: The authenticated user does not own the order.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     BadRequest:
       description: Request does not satisfy the API contract.
       content:
@@ -177,6 +281,21 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
   schemas:
+    OrderStatus:
+      type: string
+      enum: [pending, paid, shipped, cancelled]
+    OrderStatusEvent:
+      type: object
+      additionalProperties: false
+      required: [id, order_id, previous_status, status, occurred_at]
+      properties:
+        id: { type: integer, minimum: 1 }
+        order_id: { type: string }
+        previous_status:
+          $ref: '#/components/schemas/OrderStatus'
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        occurred_at: { type: string, format: date-time }
     Product:
       type: object
       additionalProperties: false
@@ -216,7 +335,7 @@ components:
       required: [id, status, items, total_cents]
       properties:
         id: { type: string }
-        status: { type: string, enum: [created] }
+        status: { type: string, enum: [created, paid, shipped, cancelled], description: Pending drafts retain the legacy public value created. Other statuses reflect the stored order status. }
         items:
           type: array
           minItems: 1

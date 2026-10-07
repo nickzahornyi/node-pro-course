@@ -22,19 +22,19 @@ export class OrdersRepository {
   }
   async find(id: string) {
     if (!validId(id)) return null;
-    const { rows } = await this.db.query(`SELECT o.id,o.total_cents,i.product_id,i.quantity,i.unit_price_cents
+    const { rows } = await this.db.query(`SELECT o.id,o.status,o.total_cents,i.product_id,i.quantity,i.unit_price_cents
       FROM orders o JOIN order_items i ON i.order_id=o.id WHERE o.id=$1 ORDER BY i.id`, [id]);
     if (!rows.length) return null;
-    return { id: rows[0].id as string, status: 'created' as const, total_cents: Number(rows[0].total_cents),
+    return { id: rows[0].id as string, status: rows[0].status === 'pending' ? 'created' : rows[0].status, total_cents: Number(rows[0].total_cents),
       items: rows.map(row => ({ product_id: row.product_id as string, quantity: row.quantity as number, unit_price_cents: Number(row.unit_price_cents) })) };
   }
   async list(after: string, limit: number) {
-    const { rows } = await this.db.query(`SELECT o.id,o.total_cents,
+    const { rows } = await this.db.query(`SELECT o.id,o.status,o.total_cents,
       json_agg(json_build_object('product_id',i.product_id::text,'quantity',i.quantity,
         'unit_price_cents',i.unit_price_cents) ORDER BY i.id) AS items
-      FROM (SELECT id,total_cents FROM orders WHERE id > $1 ORDER BY id LIMIT $2) o
-      JOIN order_items i ON i.order_id=o.id GROUP BY o.id,o.total_cents ORDER BY o.id`, [after, limit]);
-    return rows.map(row => ({ id: row.id as string, status: 'created' as const,
+      FROM (SELECT id,status,total_cents FROM orders WHERE id > $1 ORDER BY id LIMIT $2) o
+      JOIN order_items i ON i.order_id=o.id GROUP BY o.id,o.status,o.total_cents ORDER BY o.id`, [after, limit]);
+    return rows.map(row => ({ id: row.id as string, status: row.status === 'pending' ? 'created' : row.status,
       total_cents: Number(row.total_cents), items: row.items }));
   }
   async totalForUser(userId: string): Promise<string> {
