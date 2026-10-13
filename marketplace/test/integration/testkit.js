@@ -10,7 +10,7 @@ export async function startDatabase() {
   const uri = new URL(container.getConnectionUri());
   const password = decodeURIComponent(uri.password);
   uri.password = '';
-  const env = { ...process.env, NODE_ENV: 'test', DB_URL: uri.toString(), DB_PASSWORD: password, AUTH_SECRET: randomBytes(32).toString('hex') };
+  const env = { ...process.env, NODE_ENV: 'test', DB_URL: uri.toString(), DB_PASSWORD: password, AUTH_SECRET: randomBytes(32).toString('hex'), BROKER_URL: '' };
   const pool = new pg.Pool({ connectionString: container.getConnectionUri() });
   try {
     await promisify(execFile)(process.execPath, ['node_modules/typeorm/cli.js', 'migration:run', '-d', 'dist/data-source.js'], { env });

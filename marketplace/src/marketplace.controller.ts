@@ -1,8 +1,9 @@
-import { BadRequestException, Body, Controller, Get, Headers, NotFoundException, Post, Query, Param, Res, UnprocessableEntityException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, NotFoundException, Post, Query, Param, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { DatabaseService } from './database.service.js';
 import { ProductsRepository, validId } from './repositories/products.repository.js';
 import { OrdersRepository, type ItemInput } from './repositories/orders.repository.js';
+import { OrderCreationService } from './order-creation.service.js';
 
 function afterId(cursor?: string): string {
   if (!cursor) return '0';
@@ -21,7 +22,7 @@ const productDto = (p: any) => ({ id: p.id, name: p.name, price_cents: Number(p.
 @Controller()
 export class MarketplaceController {
   private readonly started = Date.now();
-  constructor(private readonly db: DatabaseService, private readonly products: ProductsRepository, private readonly orders: OrdersRepository) {}
+  constructor(private readonly db: DatabaseService, private readonly products: ProductsRepository, private readonly orders: OrdersRepository, private readonly creation: OrderCreationService) {}
   @Get('health') health() { return { status: 'ok', uptime_seconds: Math.floor((Date.now() - this.started) / 1000) }; }
   @Get('db-health') async dbHealth() { await this.db.ping(); return { status: 'ok' }; }
   @Get('products') async listProducts(@Query('cursor') cursor?: string, @Query('limit') limit = 20) {
@@ -41,25 +42,7 @@ export class MarketplaceController {
     return order;
   }
   @Post('orders') async createOrder(@Headers('idempotency-key') key: string, @Body() body: { items: ItemInput[] }, @Res({ passthrough: true }) response: Response) {
-    const result = await this.db.transaction(async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
-      const fingerprint = JSON.stringify(body);
-      const { rows: [previous] } = await client.query('SELECT * FROM order_requests WHERE key=$1', [key]);
-      const repository = new OrdersRepository(client);
-      if (previous) {
-        if (previous.fingerprint !== fingerprint) throw new UnprocessableEntityException('Idempotency-Key already used with a different body');
-        const order = await repository.find(previous.order_id);
-        // Replay the creation response even after a later status update.
-        return { order: order ? { ...order, status: 'created' } : null, replay: true };
-      }
-      // Existing public contract has no buyer/auth/payment field: create a draft, not a debit.
-      const { rows: [guest] } = await client.query(`INSERT INTO users(email,display_name)
-        VALUES('public-drafts@marketplace.invalid','Public draft orders')
-        ON CONFLICT (lower(email)) DO UPDATE SET display_name=users.display_name RETURNING id`);
-      const order = await repository.create(guest.id, body.items);
-      await client.query('INSERT INTO order_requests(key,fingerprint,order_id) VALUES($1,$2,$3)', [key, fingerprint, order!.id]);
-      return { order, replay: false };
-    });
+    const result = await this.creation.create(key, body);
     if (result.replay) response.setHeader('Idempotency-Replay', 'true');
     return result.order;
   }

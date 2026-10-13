@@ -9,7 +9,7 @@ class ProblemFilter implements ExceptionFilter {
     const context = host.switchToHttp();
     const response = context.getResponse();
     const status = error instanceof HttpException ? error.getStatus() : Number.isInteger(error.status) ? error.status : 500;
-    const title = ({ 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 410: 'Gone', 422: 'Unprocessable Entity' } as Record<number, string>)[status] || 'Internal Server Error';
+    const title = ({ 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 410: 'Gone', 422: 'Unprocessable Entity', 503: 'Service Unavailable' } as Record<number, string>)[status] || 'Internal Server Error';
     response.status(status).type('application/problem+json').json({ type: `https://marketplace.example/problems/${status}`,
       title, status, detail: status >= 500 ? title : error.message, instance: context.getRequest().originalUrl });
   }
