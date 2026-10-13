@@ -48,7 +48,9 @@ export class MarketplaceController {
       const repository = new OrdersRepository(client);
       if (previous) {
         if (previous.fingerprint !== fingerprint) throw new UnprocessableEntityException('Idempotency-Key already used with a different body');
-        return { order: await repository.find(previous.order_id), replay: true };
+        const order = await repository.find(previous.order_id);
+        // Replay the creation response even after a later status update.
+        return { order: order ? { ...order, status: 'created' } : null, replay: true };
       }
       // Existing public contract has no buyer/auth/payment field: create a draft, not a debit.
       const { rows: [guest] } = await client.query(`INSERT INTO users(email,display_name)

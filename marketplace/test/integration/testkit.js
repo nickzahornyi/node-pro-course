@@ -3,13 +3,14 @@ import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import pg from 'pg';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomBytes } from 'node:crypto';
 
 export async function startDatabase() {
   const container = await new PostgreSqlContainer('postgres:16-alpine').start();
   const uri = new URL(container.getConnectionUri());
   const password = decodeURIComponent(uri.password);
   uri.password = '';
-  const env = { ...process.env, NODE_ENV: 'test', DB_URL: uri.toString(), DB_PASSWORD: password };
+  const env = { ...process.env, NODE_ENV: 'test', DB_URL: uri.toString(), DB_PASSWORD: password, AUTH_SECRET: randomBytes(32).toString('hex') };
   const pool = new pg.Pool({ connectionString: container.getConnectionUri() });
   try {
     await promisify(execFile)(process.execPath, ['node_modules/typeorm/cli.js', 'migration:run', '-d', 'dist/data-source.js'], { env });

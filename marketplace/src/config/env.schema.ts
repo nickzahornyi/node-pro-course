@@ -36,6 +36,8 @@ export const envSchema = z.object({
   }),
   DB_PASSWORD_FILE: z.string().min(1).default('/run/secrets/db_password'),
   DB_PASSWORD: z.string().min(1).optional(),
+  AUTH_SECRET_FILE: z.string().min(1).default('/run/secrets/realtime_auth_secret'),
+  AUTH_SECRET: z.string().min(32).optional(),
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
   NPLUS1_SIZES: z.string().default('5,10').superRefine((value, ctx) => {
     const sizes = value.split(',').map((part) => Number(part.trim()));

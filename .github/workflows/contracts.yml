@@ -2,7 +2,7 @@ name: Marketplace tests and contracts
 on:
   pull_request:
   push:
-    branches: [main, hw-16]
+    branches: [main, hw-16, hw-18]
 permissions:
   contents: read
 defaults:

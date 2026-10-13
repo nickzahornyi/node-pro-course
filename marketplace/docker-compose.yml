@@ -45,6 +45,10 @@ services:
         if [ ! -s /runtime/userlist.txt ]; then
           printf '"marketplace" "%s"\n' "$$(cat /runtime/db_password)" > /runtime/userlist.txt
         fi
+        if [ ! -s /runtime/realtime_auth_secret ]; then
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /runtime/realtime_auth_secret
+        fi
+        chmod 644 /runtime/realtime_auth_secret
         chmod 644 /runtime/db_password /runtime/userlist.txt
     volumes:
       - db_credentials:/runtime
@@ -128,6 +132,7 @@ services:
       DB_URL: postgresql://marketplace@pgbouncer:6432/marketplace
       DB_PASSWORD_FILE: /run/secrets/db_password
       DB_POOL_MAX: 10
+      AUTH_SECRET_FILE: /run/secrets/realtime_auth_secret
     volumes:
       - db_credentials:/run/secrets:ro
     depends_on:
