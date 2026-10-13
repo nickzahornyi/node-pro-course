@@ -172,7 +172,7 @@ paths:
     get:
       operationId: streamOrderEvents
       summary: Subscribe to an owned order status stream
-      description: SSE frames contain id, event order.status, and JSON data with the OrderStatusEvent shape. Last-Event-ID replays retained events strictly greater than the cursor. Without the header only future changes are sent. The last 500 events are retained per process; expired replay history returns 410 and a cursor ahead of history returns 400.
+      description: SSE frames contain id, event order.status, and JSON data with the OrderStatusEvent shape. Last-Event-ID replays retained events strictly greater than the cursor. Without the header only future changes are sent. The last 500 events are retained separately per order in this process; expired replay history returns 410. A cursor ahead of process history opens HTTP 200 without replay and receives new live events, whose IDs may be lower after a restart. Malformed cursors return 400.
       security:
         - RealtimeBearer: []
       parameters:

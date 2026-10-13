@@ -2,7 +2,7 @@ import { io } from 'socket.io-client';
 import { execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const base = process.env.REALTIME_URL || 'http://127.0.0.1:3000';
+const base = process.env.REALTIME_URL || `http://127.0.0.1:${process.env.PORT || '3000'}`;
 const orderA = process.env.REALTIME_ORDER_A || '1';
 const orderB = process.env.REALTIME_ORDER_B || '2';
 const sameRoom = process.argv.includes('--same-room');

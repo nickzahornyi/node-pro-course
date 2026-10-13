@@ -69,11 +69,12 @@ async function nextEvent(stream) {
 }
 
 it('headless demo measures different rooms and the same-room positive control', async () => {
-  const env = { ...process.env, REALTIME_URL: base, REALTIME_ORDER_A: orderA.id, REALTIME_ORDER_B: orderB.id, REALTIME_TOKEN_A: tokenA, REALTIME_TOKEN_B: tokenB };
+  const env = { ...process.env, PORT: new URL(base).port, REALTIME_ORDER_A: orderA.id, REALTIME_ORDER_B: orderB.id, REALTIME_TOKEN_A: tokenA, REALTIME_TOKEN_B: tokenB };
+  delete env.REALTIME_URL; // Normal run must discover the non-default listening port via PORT.
   const run = promisify(execFile);
   const normal = await run(process.execPath, ['scripts/realtime-demo.mjs'], { env, timeout: 20000 });
   expect(normal.stdout).toBe('A_RECEIVED=1\nB_RECEIVED=0\n');
-  const control = await run(process.execPath, ['scripts/realtime-demo.mjs', '--same-room'], { env, timeout: 20000 });
+  const control = await run(process.execPath, ['scripts/realtime-demo.mjs', '--same-room'], { env: { ...env, PORT: '1', REALTIME_URL: base }, timeout: 20000 });
   expect(control.stdout).toBe('A_RECEIVED=1\nB_RECEIVED=1\n');
 });
 
@@ -114,7 +115,14 @@ it('Last-Event-ID replays only missed events of the owned order without duplicat
   const live = await patch(orderA, tokenA, 'paid').expect(200);
   expect((await nextEvent(stream)).id).toBe(live.body.event_id);
   await request(app.getHttpServer()).get(`/orders/${orderA.id}/events`).set('Authorization', `Bearer ${tokenA}`).set('Last-Event-ID', '-1').expect(400);
-  await request(app.getHttpServer()).get(`/orders/${orderA.id}/events`).set('Authorization', `Bearer ${tokenA}`).set('Last-Event-ID', '999999999').expect(400);
+});
+
+it('future Last-Event-ID keeps HTTP 200 and receives the next live event below the old cursor', async () => {
+  const stream = await openStream(orderA, tokenA, 999999999);
+  const changed = await patch(orderA, tokenA, 'paid').expect(200);
+  const live = await nextEvent(stream);
+  expect(live.id).toBe(changed.body.event_id); expect(live.id).toBeLessThan(999999999);
+  expect(live.data).toMatchObject({ order_id: orderA.id, status: 'paid' });
 });
 
 it('no-op, invalid status and rolled-back transaction publish no events', async () => {

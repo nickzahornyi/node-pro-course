@@ -17,11 +17,26 @@ test('identity token rejects tampering, expiration and invalid numeric identity'
 
 test('bounded replay returns no duplicates, isolates orders and rejects expired history', () => {
   const events = new OrderEventsService();
-  for (let n = 0; n < events.capacity + 1; n++) events.publish({ order_id: n % 2 ? '2' : '1', previous_status: 'pending', status: 'paid' });
+  const publish = order_id => events.publish({ order_id, previous_status: 'pending', status: 'paid' });
+  publish('1'); publish('1');
+  for (let n = 0; n < events.capacity + 1; n++) publish('2');
+  assert.deepEqual(events.replay('1', 0).map(event => event.id), [1, 2]);
+  assert.throws(() => events.replay('2', 0), /replay window/);
+  const retained = events.replay('2', 3);
+  assert.equal(retained.length, events.capacity);
+  assert.equal(retained[0].id, 4);
+  assert.equal(retained.at(-1).id, events.capacity + 3);
+  assert.equal(new Set(retained.map(event => event.id)).size, events.capacity);
+  // Repeated wraps still retain exactly the latest 500 events in chronological order.
+  for (let n = 0; n < events.capacity * 2 + 1; n++) publish('1');
   assert.throws(() => events.replay('1', 0), /replay window/);
-  const replay = events.replay('1', events.capacity - 2);
-  assert.deepEqual(replay.map(event => event.id), [499, 501]);
-  assert.ok(replay.every(event => event.order_id === '1'));
-  assert.throws(() => events.replay('1', events.capacity + 2), /Invalid Last-Event-ID/);
+  const latestId = events.capacity * 3 + 4;
+  const replay = events.replay('1', latestId - events.capacity);
+  assert.equal(replay.length, events.capacity);
+  assert.deepEqual(replay.map(event => event.id), Array.from({ length: events.capacity }, (_, n) => latestId - events.capacity + n + 1));
+  assert.deepEqual(events.replay('2', latestId), []);
+  assert.deepEqual(events.replay('1', latestId + 1), []);
+  assert.throws(() => events.replay('1', -1), /Invalid Last-Event-ID/);
+  assert.throws(() => events.replay('1', Number.MAX_SAFE_INTEGER + 1), /Invalid Last-Event-ID/);
   events.onModuleDestroy();
 });
