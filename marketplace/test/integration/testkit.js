@@ -32,5 +32,5 @@ export async function startApplication(database) {
 }
 
 export async function truncate(pool) {
-  await pool.query('TRUNCATE order_requests,jobs,order_items,orders,products,users RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE outbox,processed_messages,order_requests,jobs,order_items,orders,products,users RESTART IDENTITY CASCADE');
 }

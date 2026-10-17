@@ -63,6 +63,13 @@ test('live AppModule POST produces one durable effect, including idempotent HTTP
     assert.equal(rows[0].total_cents, '2500');
   } finally {
     // Only this test's fixtures, never the shared guest or unrelated orders.
+    if (productId) await ds.transaction(async manager => {
+      const ids = await manager.query('SELECT DISTINCT order_id::text AS id FROM order_items WHERE product_id=$1', [productId]);
+      const orderIds = ids.map(row => row.id);
+      await manager.query(`DELETE FROM processed_messages WHERE message_id IN
+        (SELECT id FROM outbox WHERE aggregate_type='order' AND aggregate_id=ANY($1::text[]))`, [orderIds]);
+      await manager.query("DELETE FROM outbox WHERE aggregate_type='order' AND aggregate_id=ANY($1::text[])", [orderIds]);
+    });
     if (productId) await ds.query('DELETE FROM orders WHERE id IN (SELECT order_id FROM order_items WHERE product_id=$1)', [productId]);
     if (productId) await ds.query('DELETE FROM products WHERE id=$1', [productId]);
     if (sellerId) await ds.query('DELETE FROM users WHERE id=$1', [sellerId]);
