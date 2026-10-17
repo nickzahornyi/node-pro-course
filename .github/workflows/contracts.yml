@@ -23,6 +23,39 @@ jobs:
       - run: npm test
       - run: npm run test:integration && npm run test:integration
       - run: npm run test:e2e
+  async:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: marketplace-async-ci
+      SKIP_VAULT: '1'
+      DB_URL: postgresql://marketplace@127.0.0.1:6432/marketplace
+      DB_PASSWORD: marketplace-local-password
+      BROKER_URL: amqp://app:app@127.0.0.1:5672
+      ASYNC_API_URL: http://127.0.0.1:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: marketplace/package-lock.json
+      - run: npm ci
+      - run: docker compose up -d --wait app order-consumer
+      - name: Run all async demos twice without manual cleanup
+        run: |
+          for round in 1 2; do
+            npm run demo:publish
+            npm run demo:dlq
+            npm run demo:duplicate
+          done
+      - run: npm run test:async
+      - name: Collect async service diagnostics
+        if: failure()
+        run: docker compose ps -a && docker compose logs --no-color --tail=150
+      - name: Stop isolated async deployment
+        if: always()
+        run: docker compose down --volumes
   contract:
     runs-on: ubuntu-latest
     services:

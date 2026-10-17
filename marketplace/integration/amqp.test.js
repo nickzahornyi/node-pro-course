@@ -5,6 +5,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ConfirmedPublisher, connectBroker } from '../dist/async/publisher.js';
 import { declareTopology } from '../dist/async/topology.js';
 import ds from '../dist/data-source.js';
+import { mkdtemp, readdir, readFile, rm, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { drainDlq } from '../dist/async/drain-dlq.js';
 
 test('real broker returns unmatched routing keys despite positive confirms', async () => {
   assert.ok(process.env.BROKER_URL, 'BROKER_URL is required');
@@ -63,5 +67,60 @@ test('live AppModule POST produces one durable effect, including idempotent HTTP
     if (productId) await ds.query('DELETE FROM products WHERE id=$1', [productId]);
     if (sellerId) await ds.query('DELETE FROM users WHERE id=$1', [sellerId]);
     await ds.destroy();
+  }
+});
+
+test('DLQ drain archives poison headers/body before ACK; storage failure keeps the delivery', async () => {
+  const prefix = `shop.test.${randomUUID()}`;
+  const names = { exchange: `${prefix}.events`, work: `${prefix}.work`, dlx: `${prefix}.dlx`, dlq: `${prefix}.dlq` };
+  const directory = await mkdtemp(join(tmpdir(), 'marketplace-dlq-'));
+  const connection = await connectBroker(process.env.BROKER_URL);
+  const admin = await connection.createChannel();
+  let publisher, reader;
+  try {
+    await declareTopology(admin, names);
+    publisher = await ConfirmedPublisher.open(process.env.BROKER_URL, names.exchange);
+    const payload = { eventId: randomUUID(), invalid: true };
+    const poison = async () => {
+      await publisher.publishRaw(payload);
+      const message = await admin.get(names.work, { noAck: false });
+      assert.ok(message); admin.reject(message, false);
+      const deadline = Date.now() + 5000;
+      while ((await admin.checkQueue(names.dlq)).messageCount !== 1) {
+        assert.ok(Date.now() < deadline, 'Poison never reached DLQ'); await delay(20);
+      }
+    };
+    await poison();
+    assert.deepEqual(await drainDlq(admin, names.dlq, directory, 1), { archived: 1, remaining: 0, archive: directory });
+    const files = await readdir(directory); assert.equal(files.length, 1);
+    const record = JSON.parse(await readFile(join(directory, files[0]), 'utf8'));
+    assert.equal(record.reason, 'rejected');
+    assert.equal(record.properties.headers['x-death'][0].reason, 'rejected');
+    assert.deepEqual(JSON.parse(Buffer.from(record.contentBase64, 'base64')), payload);
+    assert.equal((await drainDlq(admin, names.dlq, directory, 1)).archived, 0);
+
+    await poison();
+    reader = await connection.createChannel();
+    const failingDirectory = join(directory, 'vanishes');
+    // Real delivery, then the archive mount disappears before the write.
+    const failingChannel = {
+      checkQueue: queue => reader.checkQueue(queue),
+      get: async (...args) => { const message = await reader.get(...args); await rmdir(failingDirectory); return message; },
+      ack: () => assert.fail('Must not ACK when archive write fails'),
+    };
+    await assert.rejects(drainDlq(failingChannel, names.dlq, failingDirectory, 1), { code: 'ENOENT' });
+    await reader.close(); reader = undefined;
+    let recovered;
+    const deadline = Date.now() + 5000;
+    while (!(recovered = await admin.get(names.dlq, { noAck: false }))) {
+      assert.ok(Date.now() < deadline, 'Unacked delivery was not requeued'); await delay(20);
+    }
+    assert.ok(recovered); assert.equal(recovered.fields.redelivered, true);
+    admin.ack(recovered);
+  } finally {
+    await reader?.close().catch(() => {}); await publisher?.close();
+    await admin.deleteQueue(names.work); await admin.deleteQueue(names.dlq);
+    await admin.deleteExchange(names.exchange); await admin.deleteExchange(names.dlx);
+    await connection.close(); await rm(directory, { recursive: true, force: true });
   }
 });

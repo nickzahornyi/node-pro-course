@@ -155,6 +155,52 @@ E2E 12/12, live async 2/2, Pact consumer 1/1; tsc, check:env і API lint exit 0
 `prefetch_count=10`, `ack_required=true`, quorum queue та правильний DLX;
 трекнутих env-файлів із живими credentials немає.
 
+### Розбір DLQ та async CI
+
+`npm run dlq:drain` — операторський розбір poison-повідомлень, не повторна
+публікація і не purge. Після `npm run build`, з тим самим `BROKER_URL` зі сховища
+(або з `SKIP_VAULT=1` для локального стенду):
+
+```bash
+npm run dlq:drain -- --archive ./dlq-archive --limit 100
+# Після demo:dlq можна безпечно перевірити ізольовану demo-чергу:
+npm run dlq:drain -- --archive ./dlq-archive --queue shop.demo.hw19.dlq.orders.placed.dlq --limit 1
+```
+
+За замовчуванням читається `shop.orders.placed.dlq`; CLI допускає тільки цю
+чергу та три HW19 demo-DLQ. `--archive` обов'язковий, limit 1..10000.
+Кожна доставка записується окремим JSON: точне тіло у `contentBase64`, properties,
+headers (зокрема `x-death`), причина, джерело та час архівації. Після `fsync`
+файла, atomic rename з `.partial` та `fsync` каталогу йде ручний ack.
+Помилка запису означає exit 1 без ack; закриття каналу повертає повідомлення
+брокеру. На успіх друкуються `archived`, `remaining`, `archive`. Обробляється
+не більше limit із початкової глибини; якщо `remaining>0`, повторіть команду.
+
+Архів — **частина зберігання даних**, а не disposable `/tmp`: використовуйте
+надійний диск/volume і backup, збережіть його до завершення розбору причини.
+Нові каталоги/файли створюються з правами 0700/0600. Payload не друкується в лог.
+`dlq-archive/` виключений із Git і Docker build context. В іншому каталозі архів
+також не слід комітити. При падінні між архівацією й ack можливі два файли
+одного повідомлення — групуйте їх за messageId/eventId, не виконуйте повторно
+бізнес-ефект без перевірки. Незавершені `.partial` не вважаються архівами.
+Після діагностики виправляйте джерело poison, а не повертайте його сліпо в work queue.
+
+У `.github/workflows/contracts.yml` окремий job `async` піднімає RabbitMQ,
+bootstrap, API та order-consumer, запускає всі три демо **двічі** і `test:async`.
+На помилці збирає діагностику; `if: always()` прибирає лише ізольований CI-стенд.
+GitHub-run ще потребує push; локально перевіряються ті самі команди.
+Сервіси `rabbit-bootstrap`, `order-consumer`, `bootstrap`, `ops` мають окремі
+теги образів: паралельні BuildKit exports більше не перезаписують один `-ops`.
+
+Повторна перевірка 2026-10-17: перший `docker compose up -d --wait` з новим
+project `marketplace-hw19-fixes-check`, новими тегами та volumes — exit 0.
+Два кола демо дали попередні інваріанти (processing_ms 72 / 99).
+Unit 40/40, integration 12/12, E2E 12/12, live async 3/3, tsc і check:env exit 0.
+Новий live-тест архівує poison із реальною причиною `rejected`, а при зникненні
+каталогу **після доставки** перевіряє відсутність ack та broker redelivery.
+CLI теж перевірений: `archived=1 remaining=0`, повтор — `archived=0 remaining=0`;
+payload і x-death збережені в архіві. Тестувався лише ізольований demo-DLQ.
+
 ## Realtime HW-18
 
 Команди виконуються з `marketplace/` у гілці `hw-18`; потрібні Node.js 22+ та Docker Desktop. Підніміть окремий стенд із чистими volumes, щоб seed-користувачі 1 і 2 володіли відповідно замовленнями 1 і 2. На вже заповненій БД ID можуть відрізнятися: задайте `REALTIME_ORDER_A/B` і `REALTIME_USER_A/B` за фактичними `orders.id/user_id`.
