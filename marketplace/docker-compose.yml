@@ -1,4 +1,60 @@
 services:
+  rabbitmq:
+    image: rabbitmq:4.2-management@sha256:9e9fd21d60f060acc9ecbd847cd1dcb87e6550bdb0297c27e79a40bfe1766ce4
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: app
+      RABBITMQ_DEFAULT_PASS: app
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "127.0.0.1:${BROKER_PUBLISHED_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PUBLISHED_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+
+  rabbit-bootstrap:
+    image: ${COMPOSE_PROJECT_NAME:-marketplace}-rabbit-bootstrap-ops
+    pull_policy: build
+    build:
+      context: .
+      target: ops
+    environment:
+      BROKER_URL: amqp://app:app@rabbitmq:5672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: ["node", "dist/async/bootstrap.js"]
+
+  order-consumer:
+    image: ${COMPOSE_PROJECT_NAME:-marketplace}-order-consumer-ops
+    pull_policy: build
+    build:
+      context: .
+      target: ops
+    environment:
+      DB_URL: postgresql://marketplace@pgbouncer:6432/marketplace
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      BROKER_URL: amqp://app:app@rabbitmq:5672
+    volumes:
+      - db_credentials:/run/secrets:ro
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      rabbit-bootstrap:
+        condition: service_completed_successfully
+    command: ["node", "dist/async/consumer-main.js"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(require('fs').existsSync('/tmp/order-consumer-ready') ? 0 : 1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   pact-db:
     image: postgres:16-alpine
     environment:
@@ -94,7 +150,7 @@ services:
       retries: 30
 
   bootstrap:
-    image: ${COMPOSE_PROJECT_NAME:-marketplace}-ops
+    image: ${COMPOSE_PROJECT_NAME:-marketplace}-bootstrap-ops
     pull_policy: build
     build:
       context: .
@@ -133,10 +189,13 @@ services:
       DB_PASSWORD_FILE: /run/secrets/db_password
       DB_POOL_MAX: 10
       AUTH_SECRET_FILE: /run/secrets/realtime_auth_secret
+      BROKER_URL: amqp://app:app@rabbitmq:5672
     volumes:
       - db_credentials:/run/secrets:ro
     depends_on:
       bootstrap:
+        condition: service_completed_successfully
+      rabbit-bootstrap:
         condition: service_completed_successfully
     ports:
       - "127.0.0.1:${APP_PUBLISHED_PORT:-3000}:3000"
@@ -152,6 +211,7 @@ secrets:
     file: ./db/db_password.example
 
 volumes:
+  rabbitmq_data:
   pact_data:
   postgres_data:
   db_credentials:

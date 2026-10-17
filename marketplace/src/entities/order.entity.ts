@@ -7,11 +7,15 @@ export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'cancelled';
 @Entity('orders')
 @Index('orders_user_created_idx', { synchronize: false })
 @Index('orders_pending_created_idx', { synchronize: false })
+@Index('orders_placed_event_id_idx', ['placedEventId'], { unique: true })
 @Check('orders_status_check', "status IN ('pending', 'paid', 'shipped', 'cancelled')")
 @Check('orders_total_cents_check', 'total_cents >= 0 AND total_cents <= 99999999999999')
 export class Order {
   @PrimaryGeneratedColumn('identity', { type: 'bigint', generatedIdentity: 'ALWAYS' })
   id!: string;
+
+  @Column({ name: 'placed_event_id', type: 'uuid', default: () => 'gen_random_uuid()' })
+  placedEventId!: string;
 
   @Column({ name: 'user_id', type: 'bigint' })
   userId!: string;

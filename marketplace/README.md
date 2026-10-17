@@ -1,6 +1,6 @@
 # Marketplace API contract
 
-Для поточного ДЗ **HW-18 (WebSocket / SSE)** починайте з [Realtime](#realtime-hw-18).
+Для поточного ДЗ **HW-19** починайте з [Async-подій через RabbitMQ](#async-події-через-rabbitmq) та [Grading](#grading).
 Усі npm/Compose-команди виконуються в `marketplace/` після клонування репозиторію.
 Розділ HW-12 нижче збережено як окремий SQL-стенд попереднього завдання.
 
@@ -8,6 +8,198 @@
 Nest-застосунок використовує `express-openapi-validator` для перевірки запитів і відповідей за `openapi/openapi.yaml`. Товари, замовлення та ключі ідемпотентності зберігаються в PostgreSQL. Старий `src/app.ts` залишено лише для історичних unit-тестів; production entrypoint — `src/main.ts` → `AppModule`.
 
 Публічний POST `/orders` створює draft: початковий контракт не містить покупця чи оплати, тому використовується технічний гостьовий користувач, без списання балансу й запасів. Транзакційний оплачуваний checkout із HW-14 залишається окремим сценарієм `src/checkout.ts`. ID товару беріть із GET `/products` (після seed, наприклад, `1`).
+
+## Async-події через RabbitMQ
+
+Гілка `hw-19`. RabbitMQ 4.2 management зафіксований digest у Compose. Bootstrap
+(`src/async/bootstrap.ts`) і споживач оголошують durable topic exchange
+`shop.events`, quorum work queue `shop.orders.placed` та binding `order.placed`.
+Окремий direct DLX `shop.events.dlx` маршрутизує `order.placed.failed` у quorum
+`shop.orders.placed.dlq`; робоча черга має `x-dead-letter-exchange`,
+`x-dead-letter-routing-key` і `x-delivery-limit=20`. Продюсер не оголошує черг
+або binding: він знає лише exchange та routing key.
+
+Критична операція HW-14 `checkout(..., publisher)` в одній транзакції списує
+stock і баланс, створює paid order, items та job; **після COMMIT** публікує
+`order.placed`. Саме цей шлях викликають `demo:publish` і `demo:duplicate`.
+Публічний draft POST `/orders` теж публікує після COMMIT через
+`OrderCreationService`, не змінюючи попередній HTTP-контракт. `BROKER_URL`
+вмикає HTTP-публікацію (у Compose заданий); без нього старі ізольовані тести
+працюють без брокера. Старі HW-14 виклики checkout без publisher збережені
+для регресії й самі подій не публікують.
+
+Контракт свідомо сконструйований у `src/async/order-placed.ts`, а не взятий
+через spread ORM-сутності. Приклад форми (ID/час тут ілюстративні):
+
+```json
+{
+  "eventId": "16f8dc68-1cdc-4c28-90dc-b75c51f51b31",
+  "type": "order.placed",
+  "version": 1,
+  "occurredAt": "2026-10-13T17:00:00.000Z",
+  "data": { "orderId": "42", "buyerId": "7", "totalCents": "2500" }
+}
+```
+
+UUID `orders.placed_event_id` і час створення зберігаються в БД: повторна
+публікація того самого замовлення не генерує новий eventId. Bigint ID і cents
+передаються рядками, без втрати точності JS. Zod перевіряє тип, версію,
+UUID, час і межі ID; споживач також звіряє покупця, суму й UUID із committed order.
+
+`ConfirmedPublisher` використовує `createConfirmChannel`, persistent повідомлення,
+`mandatory: true`, слухач `return` та `waitForConfirms` з таймаутом 10 секунд.
+Позитивний confirm без відповідного binding **не** вважається успіхом: mandatory
+return завершує публікацію помилкою. Для HTTP це 503 problem+json після вже
+збереженого order; повторюйте POST із **тим самим** Idempotency-Key, щоб
+публікувати той самий eventId, а не оформляти друге замовлення.
+
+Ефект споживача — durable запис сповіщення в PostgreSQL `order_notifications`,
+а не відправка email. `event_id` — primary key; один
+`INSERT ... ON CONFLICT(event_id) DO NOTHING RETURNING event_id` одночасно
+застосовує ефект і дедуплікує. `noAck: false`; `ack` тільки після завершення
+INSERT (або виявлення durable дубля). Необроблюваний контракт отримує
+`reject(message, false)` і потрапляє у DLQ; тимчасова DB-помилка —
+`reject(message, true)` з обмеженням повторів quorum delivery-limit.
+Set у consumer відстежує лише незавершені Promise, не оброблені eventId.
+
+`prefetch=10` реально виставлений через `channel.prefetch(10)`. Для бюджету
+обробки 1 с маємо `10 × 1 с = 10 с < consumer_timeout 1800 с`; виміряні нижче
+суми часу п'яти обробок становили 68 і 54 мс (13.6 і 10.8 мс на повідомлення).
+Це не гарантія часу при відмові БД: для довгих задач потрібно зменшувати prefetch
+та контролювати час/здоров'я consumer. `basic.cancel` чи обрив каналу завершує
+процес помилкою, а Compose перезапускає його; healthcheck чекає readiness marker.
+
+Власний прогін 2026-10-13: ізольований чистий Compose-стенд, усі три демо
+двічі підряд **без ручного очищення**, exit 0 в кожному. Кожне демо очищує
+лише свої `shop.demo.hw19.<mode>.*` черги й fixtures користувачів
+`hw19-<mode>-<role>@demo.marketplace.invalid`, не application queues/дані.
+Transaction-scoped advisory lock серіалізує повторний запуск того самого demo;
+дочірні споживачі самі завершуються. Демо потребують вільних власних demo queues.
+
+`demo:publish`: п'ять подій спочатку накопичились у черзі **без споживача**,
+потім окремий процес отримав їх і створив п'ять записів; stock=5, balance=5000.
+Підсумки обох прогонів однакові, відрізняється лише processing_ms (68 / 54):
+
+```text
+published=5
+delivered=5
+effect=5
+acked=5
+dlq=0
+prefetch=10
+processing_ms=68
+```
+
+`demo:dlq`: реально опублікований невалідний контракт, причина прочитана з
+broker headers `x-death[0].reason` (fallback `x-first-death-reason`), не підставлена
+константою. Після огляду повідомлення залишається в DLQ; наступний прогін сам очищує її.
+Обидва прогони:
+
+```text
+rejected=1
+work=0
+dlq=1
+dlq-reason=rejected
+effect=0
+```
+
+`demo:duplicate`: перший **окремий процес** виконав INSERT і повідомив parent
+через IPC, але ще не ack; parent завершив його SIGKILL. Новий процес отримав
+redelivery того самого eventId і знайшов durable дубль у PostgreSQL.
+Обидва прогони:
+
+```text
+deliveries=2
+effect=1
+skipped=1
+redelivered=1
+consumer_restarts=1
+```
+
+**Чому at-least-once, а не exactly-once доставка?** Якщо процес впаде після
+ефекту, але перед ack, брокер повторить доставку: це видно як deliveries=2.
+At-least-once доставка + ідемпотентний ефект дають exactly-once **результат**
+(один запис сповіщення), а не exactly-once доставку від RabbitMQ. Дедуп
+переживає рестарт і працює між споживачами завдяки PK у спільній БД.
+Для цього конкретного INSERT немає окремої щілини «позначка виконана, ефект ні»:
+запис і є ефектом. Якби ефектом був зовнішній email або окрема зміна балансу,
+окрема позначка не була б атомарною з ним; потрібні спільна транзакція/
+processed_messages чи outbox відповідно, це межа ДЗ #22.
+
+Залишається **щілина DB COMMIT → publish**: confirm не робить PostgreSQL і
+RabbitMQ однією транзакцією. Аварія тут може лишити order без події. HTTP replay
+допомагає повторити публікацію, але не замінює transactional outbox HW-22;
+paid checkout після помилки публікації не можна сліпо виконувати повторно,
+бо він не має HTTP Idempotency-Key. DLX у цьому ДЗ використовує стандартну
+at-most-once dead-letter передачу: відмова DLQ може втратити poison-повідомлення.
+At-least-once dead-lettering quorum потребує додаткової політики
+`dead-letter-strategy=at-least-once` **разом** з `overflow=reject-publish`.
+Один локальний RabbitMQ вузол і durable quorum queues не є HA-кластером.
+
+Секрети: додайте `BROKER_URL` у **наявний** Infisical dev-проєкт поруч із
+`DB_URL`/`DB_PASSWORD`; нових env-файлів немає. Три npm-demo починаються буквально
+з `bash scripts/with-secrets.sh dev ...`; обгортка HW-11 не змінена.
+У грейдера `SKIP_VAULT=1` передає вже встановлене оточення; локально перевірено
+саме цей штатний режим (Infisical-проєкт користувача ще не налаштований).
+Compose app/app і dev DB password — відкриті локальні fixtures, не prod-секрети;
+для production потрібні власні секрети та broker credentials зі сховища.
+
+Додаткова перевірка `npm run test:async` проти живого Compose:
+mandatory return на unmatched routing key та реальний HTTP POST/replay → один
+DB effect. `test:integration` також перевіряє 12 конкурентних дублів, повтор
+після нового DB connection, видимість COMMIT до publish, rollback без publish
+і збереження order при помилці брокера. Старі realtime/E2E тести залишились зеленими.
+Підсумок: unit 37/37, integration 12/12 (включно з реальним down/up міграції),
+E2E 12/12, live async 2/2, Pact consumer 1/1; tsc, check:env і API lint exit 0
+(lint має три попередні warnings). Rabbit management API окремо підтвердив
+`prefetch_count=10`, `ack_required=true`, quorum queue та правильний DLX;
+трекнутих env-файлів із живими credentials немає.
+
+### Розбір DLQ та async CI
+
+`npm run dlq:drain` — операторський розбір poison-повідомлень, не повторна
+публікація і не purge. Після `npm run build`, з тим самим `BROKER_URL` зі сховища
+(або з `SKIP_VAULT=1` для локального стенду):
+
+```bash
+npm run dlq:drain -- --archive ./dlq-archive --limit 100
+# Після demo:dlq можна безпечно перевірити ізольовану demo-чергу:
+npm run dlq:drain -- --archive ./dlq-archive --queue shop.demo.hw19.dlq.orders.placed.dlq --limit 1
+```
+
+За замовчуванням читається `shop.orders.placed.dlq`; CLI допускає тільки цю
+чергу та три HW19 demo-DLQ. `--archive` обов'язковий, limit 1..10000.
+Кожна доставка записується окремим JSON: точне тіло у `contentBase64`, properties,
+headers (зокрема `x-death`), причина, джерело та час архівації. Після `fsync`
+файла, atomic rename з `.partial` та `fsync` каталогу йде ручний ack.
+Помилка запису означає exit 1 без ack; закриття каналу повертає повідомлення
+брокеру. На успіх друкуються `archived`, `remaining`, `archive`. Обробляється
+не більше limit із початкової глибини; якщо `remaining>0`, повторіть команду.
+
+Архів — **частина зберігання даних**, а не disposable `/tmp`: використовуйте
+надійний диск/volume і backup, збережіть його до завершення розбору причини.
+Нові каталоги/файли створюються з правами 0700/0600. Payload не друкується в лог.
+`dlq-archive/` виключений із Git і Docker build context. В іншому каталозі архів
+також не слід комітити. При падінні між архівацією й ack можливі два файли
+одного повідомлення — групуйте їх за messageId/eventId, не виконуйте повторно
+бізнес-ефект без перевірки. Незавершені `.partial` не вважаються архівами.
+Після діагностики виправляйте джерело poison, а не повертайте його сліпо в work queue.
+
+У `.github/workflows/contracts.yml` окремий job `async` піднімає RabbitMQ,
+bootstrap, API та order-consumer, запускає всі три демо **двічі** і `test:async`.
+На помилці збирає діагностику; `if: always()` прибирає лише ізольований CI-стенд.
+GitHub-run ще потребує push; локально перевіряються ті самі команди.
+Сервіси `rabbit-bootstrap`, `order-consumer`, `bootstrap`, `ops` мають окремі
+теги образів: паралельні BuildKit exports більше не перезаписують один `-ops`.
+
+Повторна перевірка 2026-10-17: перший `docker compose up -d --wait` з новим
+project `marketplace-hw19-fixes-check`, новими тегами та volumes — exit 0.
+Два кола демо дали попередні інваріанти (processing_ms 72 / 99).
+Unit 40/40, integration 12/12, E2E 12/12, live async 3/3, tsc і check:env exit 0.
+Новий live-тест архівує poison із реальною причиною `rejected`, а при зникненні
+каталогу **після доставки** перевіряє відсутність ack та broker redelivery.
+CLI теж перевірений: `archived=1 remaining=0`, повтор — `archived=0 remaining=0`;
+payload і x-death збережені в архіві. Тестувався лише ізольований demo-DLQ.
 
 ## Realtime HW-18
 
@@ -304,7 +496,43 @@ Runtime-образ містить production-залежності, `dist`, OpenA
 
 `cd marketplace` — перша команда після клону репозиторію; усі команди нижче виконуються в цьому каталозі з `package.json`.
 
-Для поточного завдання виконайте [Realtime HW-18](#realtime-hw-18), для попереднього — [Тестування HW-16](#тестування-hw-16). GitHub workflow знаходиться у корені Git-репозиторію: `../.github/workflows/contracts.yml`, із `working-directory: marketplace`. Наступні інструкції збережені для регресії попередніх ДЗ.
+Поточний HW-19: Node.js 22+, Docker Desktop; вільні порти 5432, 6432, 3000,
+5672, 15672 і 9292. На свіжому клоні з каталогу сервісу:
+
+```bash
+cd marketplace # перша команда після клону, лише якщо ви ще в корені репозиторію
+npm ci
+docker compose up -d --wait
+export DB_URL=postgresql://marketplace@127.0.0.1:6432/marketplace
+export DB_PASSWORD=marketplace-local-password
+export BROKER_URL=amqp://app:app@127.0.0.1:5672
+export SKIP_VAULT=1
+npx tsc --noEmit
+npm run demo:publish
+npm run demo:dlq
+npm run demo:duplicate
+# Повторити ці три демо можна без ручного очищення.
+npm run build && npm run test:async
+npm test && npm run test:integration && npm run test:e2e
+npm run check:env
+```
+
+Compose сам збирає multi-stage образи, генерує dev credentials у named volume,
+мігрує/seed БД і виконує Rabbit bootstrap **до** старту app і order-consumer.
+Rabbit healthcheck: `rabbitmq-diagnostics -q check_running`. Нові demo самі
+компілюють TypeScript, тому `tsc --noEmit` перед ними достатньо. Консоль management:
+`http://127.0.0.1:15672` (локальні app/app). Для окремого стенду задайте
+`COMPOSE_PROJECT_NAME=marketplace-hw19`; для зайнятих портів використовуйте
+`BROKER_PUBLISHED_PORT`, `RABBITMQ_MANAGEMENT_PUBLISHED_PORT`,
+`DB_PUBLISHED_PORT`, `PGBOUNCER_PUBLISHED_PORT`, `APP_PUBLISHED_PORT`,
+`PACT_BROKER_PUBLISHED_PORT` та відповідно змініть `BROKER_URL`, `DB_URL`,
+`ASYNC_API_URL` для `test:async`. У нашому прогоні: broker 56739, DB через
+PgBouncer 56439, API 53019; `docker compose up -d --build --wait` exit 0.
+
+GitHub workflow знаходиться у корені Git-репозиторію:
+`../.github/workflows/contracts.yml`, із `working-directory: marketplace`.
+Наступні інструкції збережені для регресії попередніх ДЗ;
+[Realtime HW-18](#realtime-hw-18) та [Тестування HW-16](#тестування-hw-16).
 
 Потрібні Node.js 22+ і Docker Compose з підтримкою `--wait`.
 Після клону перейдіть у каталог сервісу: `cd marketplace`.
@@ -358,8 +586,9 @@ npm run test:concurrency
 
 Очікуються `[X] InitialMarketplace…`, `[X] CheckoutQueue…` і `[X] ObservableJobProcessing…`, а після обох seed — `10 users`, `10 products`,
 `10 orders`, `20 order_items`. `migrate:revert` відкочує останню міграцію:
-спочатку видаляє `order_requests` (HW-16), наступний повертає старий CHECK `processed = 1`, наступний revert видаляє jobs і balance_cents,
-ще один — таблиці HW-13. Якщо є `processed > 1`, перший revert відмовить без втрати
+спочатку видаляє `order_notifications` і `orders.placed_event_id` (HW-19),
+наступний видаляє `order_requests` (HW-16), наступний повертає старий CHECK `processed = 1`, наступний revert видаляє jobs і balance_cents,
+ще один — таблиці HW-13. Якщо є `processed > 1`, revert CHECK-міграції відмовить без втрати
 діагностичних лічильників; такі записи потрібно спочатку дослідити.
 Виконуйте revert лише на тестовій БД: дані відкочених структур буде втрачено.
 Грейдер не потребує `.env`, `.secrets/`, CLI Infisical або ручного створення secret.

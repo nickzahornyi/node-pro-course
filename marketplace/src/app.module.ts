@@ -10,11 +10,13 @@ import { OrderEventsService } from './realtime/order-events.service.js';
 import { OrderStatusService } from './realtime/order-status.service.js';
 import { OrdersGateway } from './realtime/orders.gateway.js';
 import { OrderRealtimeController } from './realtime/order-realtime.controller.js';
+import { OrderPublisherService } from './async/order-publisher.service.js';
+import { OrderCreationService } from './order-creation.service.js';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true, validate, ignoreEnvFile: process.env.NODE_ENV === 'test' })],
   controllers: [MarketplaceController, OrderRealtimeController],
-  providers: [DatabaseService, ProductsRepository, OrdersRepository, OrderAccessService, OrderEventsService, OrderStatusService, OrdersGateway],
+  providers: [DatabaseService, ProductsRepository, OrdersRepository, OrderAccessService, OrderEventsService, OrderStatusService, OrdersGateway, OrderPublisherService, OrderCreationService],
   exports: [DatabaseService],
 })
 export class AppModule {}

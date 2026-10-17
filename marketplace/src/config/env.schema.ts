@@ -38,6 +38,12 @@ export const envSchema = z.object({
   DB_PASSWORD: z.string().min(1).optional(),
   AUTH_SECRET_FILE: z.string().min(1).default('/run/secrets/realtime_auth_secret'),
   AUTH_SECRET: z.string().min(32).optional(),
+  BROKER_URL: z.preprocess(value => value === '' ? undefined : value, z.string().superRefine((value, ctx) => {
+    try {
+      const url = new URL(value);
+      if (!['amqp:', 'amqps:'].includes(url.protocol) || !url.hostname) throw new Error();
+    } catch { ctx.addIssue({ code: 'custom', message: 'must be a valid amqp:// or amqps:// broker URL' }); }
+  }).optional()),
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
   NPLUS1_SIZES: z.string().default('5,10').superRefine((value, ctx) => {
     const sizes = value.split(',').map((part) => Number(part.trim()));

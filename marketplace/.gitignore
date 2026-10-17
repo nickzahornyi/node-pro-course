@@ -9,3 +9,4 @@ spec.json
 backups/
 pacts/
 logs/
+dlq-archive/
