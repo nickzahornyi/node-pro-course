@@ -1,13 +1,13 @@
 import { Injectable, UnprocessableEntityException } from '@nestjs/common';
 import { DatabaseService } from './database.service.js';
 import { OrdersRepository, type ItemInput } from './repositories/orders.repository.js';
-import { OrderPublisherService } from './async/order-publisher.service.js';
+import { enqueueOrder, type WriteOptions } from './outbox/write.js';
 
 @Injectable()
 export class OrderCreationService {
-  constructor(private readonly db: DatabaseService, private readonly publisher: OrderPublisherService) {}
+  constructor(private readonly db: DatabaseService) {}
 
-  async create(key: string, body: { items: ItemInput[] }) {
+  async create(key: string, body: { items: ItemInput[] }, options: WriteOptions = {}) {
     const result = await this.db.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
       const fingerprint = JSON.stringify(body);
@@ -23,10 +23,10 @@ export class OrderCreationService {
         ON CONFLICT (lower(email)) DO UPDATE SET display_name=users.display_name RETURNING id`);
       const order = await repository.create(guest.id, body.items);
       await client.query('INSERT INTO order_requests(key,fingerprint,order_id) VALUES($1,$2,$3)', [key, fingerprint, order!.id]);
+      const { rows: [row] } = await client.query('SELECT id,user_id,total_cents,placed_event_id,created_at FROM orders WHERE id=$1', [order!.id]);
+      await enqueueOrder((sql, args) => client.query(sql, args), row, options);
       return { order, replay: false };
     });
-    // Replay publishes the same persisted eventId too, recovering an uncertain prior confirm.
-    if (result.order) await this.publisher.publishOrder(result.order.id);
     return result;
   }
 }

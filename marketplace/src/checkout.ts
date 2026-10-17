@@ -2,14 +2,15 @@ import type { DataSource } from 'typeorm';
 import { Product } from './entities/product.entity.js';
 import { User } from './entities/user.entity.js';
 import { Order } from './entities/order.entity.js';
-import { orderPlaced, type PlacedOrderRow, type PlacedPublisher } from './async/order-placed.js';
+import type { PlacedOrderRow } from './async/order-placed.js';
+import { enqueueOrder, type WriteOptions } from './outbox/write.js';
 
 export class CheckoutError extends Error {
   constructor(public readonly code: 'OUT_OF_STOCK' | 'INSUFFICIENT_FUNDS') { super(code); }
 }
 
 // All statements use the same transaction-bound manager/connection.
-export async function checkout(db: DataSource, buyerId: string, productId: string, quantity = 1, publisher?: PlacedPublisher): Promise<string> {
+export async function checkout(db: DataSource, buyerId: string, productId: string, quantity = 1, options: WriteOptions = {}): Promise<string> {
   if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 2147483647) {
     throw new RangeError('quantity must be a positive PostgreSQL integer');
   }
@@ -34,8 +35,8 @@ export async function checkout(db: DataSource, buyerId: string, productId: strin
     await manager.query(`INSERT INTO order_items(order_id, product_id, quantity, unit_price_cents)
       VALUES ($1, $2, $3, $4)`, [order.id, productId, quantity, price]);
     await manager.query('INSERT INTO jobs(order_id) VALUES ($1)', [order.id]);
+    await enqueueOrder((sql, args) => manager.query(sql, args), order, options);
     return order;
   });
-  if (publisher) await publisher.publish(orderPlaced(placed)); // strictly after COMMIT
   return placed.id;
 }

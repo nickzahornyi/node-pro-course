@@ -1,6 +1,6 @@
 # Marketplace API contract
 
-Для поточного ДЗ **HW-19** починайте з [Async-подій через RabbitMQ](#async-події-через-rabbitmq) та [Grading](#grading).
+Для поточного ДЗ **HW-22** починайте з [Outbox та ідемпотентність](#outbox-та-ідемпотентність) та [Grading](#grading).
 Усі npm/Compose-команди виконуються в `marketplace/` після клонування репозиторію.
 Розділ HW-12 нижче збережено як окремий SQL-стенд попереднього завдання.
 
@@ -9,7 +9,180 @@ Nest-застосунок використовує `express-openapi-validator` �
 
 Публічний POST `/orders` створює draft: початковий контракт не містить покупця чи оплати, тому використовується технічний гостьовий користувач, без списання балансу й запасів. Транзакційний оплачуваний checkout із HW-14 залишається окремим сценарієм `src/checkout.ts`. ID товару беріть із GET `/products` (після seed, наприклад, `1`).
 
+## Outbox та ідемпотентність
+
+Гілка `hw-22`, PostgreSQL + окремий RabbitMQ із Compose. Один COMMIT тепер
+містить business order та outbox, а не network publish. Міграція
+`TransactionalOutbox1792230000000` створює:
+
+- `outbox`: UUID `id` = стабільний eventId, `aggregate_type`, `aggregate_id`,
+  `type`, `payload jsonb`, `created_at`, nullable `published_at`, `attempts`,
+  `relay_scope` (production `shop`, ізоляція демо/тестів).
+- Частковий `outbox_pending_idx(relay_scope,created_at,id) WHERE published_at IS NULL`.
+- `processed_messages(message_id,consumer,processed_at)` із composite PK.
+
+`src/checkout.ts` пише paid order, stock/balance, items, job та outbox через
+**той самий transaction-bound manager**. Публічний draft POST `/orders` зберігає
+початковий контракт без buyer/payment, але теж атомарно записує order,
+`order_requests` та outbox через один `PoolClient`. `enqueueOrder()` формує
+явний envelope HW-19 `eventId/type/version/occurredAt/data`, не ORM spread.
+Публікації в цих операціях більше немає; `OrderPublisherService` видалений.
+Немає також best-effort publish після COMMIT чи залежності HTTP-успіху від брокера.
+
+Idempotency-Key ідентифікує **намір**, не hash тіла: transaction advisory lock
+по ключу серіалізує конкуренцію, повтор повертає первинний order/201 з
+`Idempotency-Replay: true`, інше тіло з тим самим ключем — 422. Різні ключі
+з однаковим тілом створюють два законних замовлення й дві події. Replay нічого
+повторно не вставляє в outbox. Fingerprint служить тільки для перевірки
+сумісності повтору, не є ключем дедупу. Не видаляйте `order_requests` раніше
+узгодженого строку зберігання API-ключів: після видалення старий ключ стане новим наміром.
+
+`outbox-relay` у Compose запускає `src/outbox/relay-main.ts`: polling 250 мс
+на порожній вибірці, batch 10. `relayBatch()` відкриває транзакцію на одному
+з'єднанні й виконує:
+
+```sql
+SELECT id,payload FROM outbox
+WHERE relay_scope=$1 AND published_at IS NULL
+ORDER BY created_at,id LIMIT $2 FOR UPDATE SKIP LOCKED;
+-- confirmed publish кожної події, потім:
+UPDATE outbox SET published_at=clock_timestamp(),attempts=attempts+1 WHERE id=$1;
+```
+
+Lock утримується до COMMIT/ROLLBACK. Confirm + mandatory/basic.return із HW-19
+залишаються: без binding relay не позначить подію published. При помилці
+транзакція відкочується, pending row лишається; воркер відновлює канал і повторює
+спробу через 1 с. `attempts` рахує успішні та **спостережені** невдалі спроби
+(помилки записуються окремо після rollback), не є точним ledger доставок:
+SIGKILL не може оновити лічильник. Помилка наприкінці batch може повторити
+кілька вже опублікованих подій — consumer має дедуплікувати кожну з них.
+Readiness marker прибирається при помилці, на старті й при завершенні.
+
+`ORDER BY` задає порядок вибірки, **не** глобальний порядок доставки:
+паралельні relay з SKIP LOCKED можуть обганяти один одного. Цей notification
+не потребує порядку між замовленнями. Для залежних подій одного aggregate
+потрібне окреме partitioning/ordering-рішення. Курсор `id > last_id` не
+використовується: видимість визначає COMMIT, а не порядок генерації ID.
+
+Два рівні захисту consumer у `src/async/effect.ts`:
+
+1. Ефект має природний ключ `order_notifications.order_id UNIQUE`:
+   `INSERT ... ON CONFLICT(order_id) DO NOTHING` не дублює сповіщення.
+2. Inbox `INSERT processed_messages ... ON CONFLICT(message_id,consumer) DO NOTHING`
+   і сам ефект виконуються в **одній** `dataSource.transaction`. Помилка після
+   inbox INSERT відкочує і позначку, і ефект. PK працює між процесами та після
+   рестарту; Set/Map не зберігає оброблені ID. Ручний ack — лише після COMMIT.
+
+У `demo:outbox` використовується повний Nest AppModule на випадковому HTTP-порту
+і два реальні POST з тим самим Idempotency-Key. Усі три демо працюють із
+справжнім RabbitMQ (інший процес), власними `shop.demo.hw22.<mode>.*` queues,
+`relay_scope=hw22.<mode>`, fixtures і advisory lock. Вони самі очищають тільки
+свій стан та перевіряють counts у БД/брокері, без TRUNCATE application data.
+Production relay обробляє лише `shop`, тому не забирає тестові події.
+
+`demo:crash-write`: in-process fault hook викликається **після успішного
+outbox INSERT** і виконує business UPDATE з недопустимим status на тому самому
+клієнті транзакції. PostgreSQL CHECK реально відхиляє запис. HTTP отримує 500;
+замовлення, ключ і подія відкочуються. Hook не доступний через HTTP чи env;
+він увімкнений лише у приватному demo-instance сервісу.
+
+`demo:crash-relay`: обрано дозволений **змодельований обрив — виняток** рівно
+після позитивного broker confirm, до UPDATE published_at. Демо перевіряє,
+що повідомлення вже є в черзі, а outbox лишився pending. Другий запуск batch
+публікує той самий eventId; consumer отримує два повідомлення, застосовує одне.
+Це не SIGKILL relay; реальний SIGKILL consumer лишився в HW-19 demo:duplicate.
+
+**Чому не поміняти місцями publish і UPDATE published_at?** Якщо спочатку
+закомітити маркер, збій publish залишить «позначено, але не доставлено» — втрату.
+Навіть UPDATE перед publish всередині довгої транзакції не усуває невизначеності
+зовнішнього publish: broker і PostgreSQL не мають спільного COMMIT. Порядок
+confirmed publish → UPDATE → COMMIT допускає повтор, який consumer безпечно
+відсікає. Втрата відповіді брокера теж може означати вже здійснену доставку.
+Тому гарантія — at-least-once доставка + ідемпотентний ефект = exactly-once
+**результат у БД**, не exactly-once доставка від RabbitMQ і не гарантія для email.
+
+Outbox retention: пакетно видаляти тільки `published_at IS NOT NULL` старші
+узгодженого replay-вікна (наприклад, 30 днів), після перевірки delivery/consumer
+lag та backup. Pending rows не чистити. Inbox зберігати довше максимальної
+можливої повторної доставки/replay; природний ключ ефекту лишається незалежно.
+Retention тут описаний як операційна політика, автоматичного видалення немає.
+Моніторити oldest pending age, depth, attempts та DLQ; невиправний payload може
+повторюватись до ручного розбору. Outbox не має FK на orders, щоб службова подія
+не зникала каскадно; видалення order до обробки призведе до DLQ, тому такі
+видалення слід узгоджувати з життєвим циклом доставки.
+
+Для майбутнього CDC snake_case потребує явних Debezium mappings:
+`route.by.field=aggregate_type`, `table.field.event.key=aggregate_id`;
+канонічні defaults — aggregatetype/aggregateid. Також потрібно узгодити topic
+routing із `shop.events`. CDC у цьому ДЗ не підключений; envelope consumer не змінюється.
+
+Секрети — через незмінений `scripts/with-secrets.sh dev`: `DB_URL`, DB password
+та `BROKER_URL` із наявного Infisical-проєкту; нових env-файлів немає.
+Налаштованого Infisical тут немає, локальні прогони виконуються штатно з
+`SKIP_VAULT=1` і відкритими dev credentials Compose. Production потребує власних
+секретів і надійного брокера/зберігання. Команди — у [Grading](#grading).
+
+### Власні результати HW-22
+
+2026-10-17, новий Compose project/volumes, реальні PostgreSQL 17 і RabbitMQ.
+Усі три демо двічі підряд, без ручного очищення, exit 0 в кожному.
+`demo:crash-write` додатково повторено двічі з реальним CHECK-порушенням
+після INSERT outbox. Підсумки обох прогонів однакові:
+
+`demo:outbox`:
+
+```text
+requests=2
+orders=1
+outbox=1
+published=1
+deliveries=1
+effect=1
+processed=1
+```
+
+`demo:crash-write`:
+
+```text
+write-failed=1
+orders=0
+outbox=0
+published=0
+deliveries=0
+effect=0
+```
+
+`demo:crash-relay`:
+
+```text
+published=2
+deliveries=2
+applied=1
+effect=1
+processed=1
+```
+
+Окремо вимкнено RabbitMQ і production relay на власному тестовому стенді:
+живий API повернув **201**, outbox залишився pending=1. Після запуску брокера
+та relay — published=1, processed=1, effect=1; replay з тим самим ключем
+повернув те саме замовлення. Тестові fixtures прибрані, application data не чіпались.
+
+Перевірено tsc, unit 40/40, integration 15/15 (PostgreSQL testcontainers),
+E2E 13/13, live async 3/3; старі три HW-19 демо також exit 0.
+Інтеграційні тести включають реальний down/up міграції, 12 конкурентних
+дублів, rollback після inbox INSERT, природний ключ при видаленій inbox-позначці,
+паралельні relay із заблокованим publisher та crash-after-publish/retry.
+Тести з PostgreSQL container інжектують publisher для точного бар'єра;
+нові demo і live async окремо перевіряють справжній RabbitMQ, не in-memory broker.
+API lint exit 0 із трьома попередніми warnings; check:env exit 0.
+Async CI job тепер запускає по два кола HW-19 і HW-22. Remote GitHub run
+та реальний Infisical не перевірені: потрібні push і налаштований проєкт сховища.
+
 ## Async-події через RabbitMQ
+
+Історичний опис HW-19 нижче фіксує стан до outbox. У HW-22 прямий publish
+прибрано, ефект доповнено inbox; актуальна поведінка описана вище. Старі
+demo:publish/duplicate теж тепер проводять checkout-події через relay.
 
 Гілка `hw-19`. RabbitMQ 4.2 management зафіксований digest у Compose. Bootstrap
 (`src/async/bootstrap.ts`) і споживач оголошують durable topic exchange
@@ -496,7 +669,7 @@ Runtime-образ містить production-залежності, `dist`, OpenA
 
 `cd marketplace` — перша команда після клону репозиторію; усі команди нижче виконуються в цьому каталозі з `package.json`.
 
-Поточний HW-19: Node.js 22+, Docker Desktop; вільні порти 5432, 6432, 3000,
+Поточний HW-22: Node.js 22+, Docker Desktop; вільні порти 5432, 6432, 3000,
 5672, 15672 і 9292. На свіжому клоні з каталогу сервісу:
 
 ```bash
@@ -508,6 +681,11 @@ export DB_PASSWORD=marketplace-local-password
 export BROKER_URL=amqp://app:app@127.0.0.1:5672
 export SKIP_VAULT=1
 npx tsc --noEmit
+npm run demo:outbox
+npm run demo:crash-write
+npm run demo:crash-relay
+# Повторити ці три демо можна без ручного очищення.
+# Регресія HW-19:
 npm run demo:publish
 npm run demo:dlq
 npm run demo:duplicate
@@ -518,16 +696,17 @@ npm run check:env
 ```
 
 Compose сам збирає multi-stage образи, генерує dev credentials у named volume,
-мігрує/seed БД і виконує Rabbit bootstrap **до** старту app і order-consumer.
+мігрує/seed БД до старту app, виконує Rabbit bootstrap до старту order-consumer
+та outbox-relay. App більше не залежить від готовності брокера.
 Rabbit healthcheck: `rabbitmq-diagnostics -q check_running`. Нові demo самі
 компілюють TypeScript, тому `tsc --noEmit` перед ними достатньо. Консоль management:
 `http://127.0.0.1:15672` (локальні app/app). Для окремого стенду задайте
-`COMPOSE_PROJECT_NAME=marketplace-hw19`; для зайнятих портів використовуйте
+`COMPOSE_PROJECT_NAME=marketplace-hw22`; для зайнятих портів використовуйте
 `BROKER_PUBLISHED_PORT`, `RABBITMQ_MANAGEMENT_PUBLISHED_PORT`,
 `DB_PUBLISHED_PORT`, `PGBOUNCER_PUBLISHED_PORT`, `APP_PUBLISHED_PORT`,
 `PACT_BROKER_PUBLISHED_PORT` та відповідно змініть `BROKER_URL`, `DB_URL`,
-`ASYNC_API_URL` для `test:async`. У нашому прогоні: broker 56739, DB через
-PgBouncer 56439, API 53019; `docker compose up -d --build --wait` exit 0.
+`ASYNC_API_URL` для `test:async`. У нашому HW-22 прогоні: broker 56759, DB через
+PgBouncer 56459, API 53039; перший `docker compose up -d --wait` exit 0.
 
 GitHub workflow знаходиться у корені Git-репозиторію:
 `../.github/workflows/contracts.yml`, із `working-directory: marketplace`.
@@ -586,7 +765,8 @@ npm run test:concurrency
 
 Очікуються `[X] InitialMarketplace…`, `[X] CheckoutQueue…` і `[X] ObservableJobProcessing…`, а після обох seed — `10 users`, `10 products`,
 `10 orders`, `20 order_items`. `migrate:revert` відкочує останню міграцію:
-спочатку видаляє `order_notifications` і `orders.placed_event_id` (HW-19),
+спочатку видаляє `outbox` і `processed_messages` (HW-22),
+наступний видаляє `order_notifications` і `orders.placed_event_id` (HW-19),
 наступний видаляє `order_requests` (HW-16), наступний повертає старий CHECK `processed = 1`, наступний revert видаляє jobs і balance_cents,
 ще один — таблиці HW-13. Якщо є `processed > 1`, revert CHECK-міграції відмовить без втрати
 діагностичних лічильників; такі записи потрібно спочатку дослідити.
