@@ -1,10 +1,11 @@
 import type { Channel } from 'amqplib';
 
 export const PREFETCH = 10;
-export type DemoMode = 'publish' | 'dlq' | 'duplicate';
+export const DEMO_MODES = ['publish', 'dlq', 'duplicate', 'outbox', 'crash-write', 'crash-relay'] as const;
+export type DemoMode = typeof DEMO_MODES[number];
 export function topology(mode?: DemoMode) {
-  if (mode && !['publish', 'dlq', 'duplicate'].includes(mode)) throw new Error('Unknown demo scope');
-  const prefix = mode ? `shop.demo.hw19.${mode}` : 'shop';
+  if (mode && !(DEMO_MODES as readonly string[]).includes(mode)) throw new Error('Unknown demo scope');
+  const prefix = mode ? `shop.demo.${['publish', 'dlq', 'duplicate'].includes(mode) ? 'hw19' : 'hw22'}.${mode}` : 'shop';
   return { exchange: `${prefix}.events`, work: `${prefix}.orders.placed`, dlx: `${prefix}.events.dlx`, dlq: `${prefix}.orders.placed.dlq` };
 }
 export type Topology = ReturnType<typeof topology>;

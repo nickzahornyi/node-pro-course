@@ -10,12 +10,12 @@ test('parallel Compose builds never export different services to the same tag', 
   assert.equal(tags.length, new Set(tags).size);
 });
 
-test('CI runs each HW19 demo twice and the live async tests, with unconditional cleanup', async () => {
+test('CI runs each HW19/HW22 demo twice and the live async tests, with unconditional cleanup', async () => {
   const workflow = yaml.load(await readFile('../.github/workflows/contracts.yml', 'utf8'));
   const job = workflow.jobs.async;
   assert.equal(job.env.SKIP_VAULT, '1');
   const commands = job.steps.map(step => step.run ?? '').join('\n');
-  for (const script of ['demo:publish', 'demo:dlq', 'demo:duplicate', 'test:async']) assert.ok(commands.includes(`npm run ${script}`));
+  for (const script of ['demo:publish', 'demo:dlq', 'demo:duplicate', 'demo:outbox', 'demo:crash-write', 'demo:crash-relay', 'test:async']) assert.ok(commands.includes(`npm run ${script}`));
   assert.match(commands, /for round in 1 2/);
   assert.ok(job.steps.some(step => step.if === 'always()' && step.run.includes('docker compose down')));
 });

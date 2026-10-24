@@ -55,6 +55,32 @@ services:
       timeout: 3s
       retries: 30
 
+  outbox-relay:
+    image: ${COMPOSE_PROJECT_NAME:-marketplace}-outbox-relay-ops
+    pull_policy: build
+    build:
+      context: .
+      target: ops
+    environment:
+      DB_URL: postgresql://marketplace@pgbouncer:6432/marketplace
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      BROKER_URL: amqp://app:app@rabbitmq:5672
+    volumes:
+      - db_credentials:/run/secrets:ro
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      rabbit-bootstrap:
+        condition: service_completed_successfully
+    command: ["node", "dist/outbox/relay-main.js"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(require('fs').existsSync('/tmp/outbox-relay-ready') ? 0 : 1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   pact-db:
     image: postgres:16-alpine
     environment:
@@ -194,8 +220,6 @@ services:
       - db_credentials:/run/secrets:ro
     depends_on:
       bootstrap:
-        condition: service_completed_successfully
-      rabbit-bootstrap:
         condition: service_completed_successfully
     ports:
       - "127.0.0.1:${APP_PUBLISHED_PORT:-3000}:3000"

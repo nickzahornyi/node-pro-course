@@ -37,7 +37,7 @@ export class ConfirmedPublisher implements PlacedPublisher {
           persistent: true, mandatory: true, contentType: 'application/json', messageId: eventId, type: 'order.placed',
         });
         await Promise.race([this.channel.waitForConfirms(), new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Publisher confirm timed out')), 10000);
+          timer = setTimeout(() => reject(new Error('Publisher confirm timed out')), 2000);
         })]);
         if (returned) throw new Error('Unroutable order.placed event (mandatory return)');
       } finally { if (timer) clearTimeout(timer); this.channel.off('return', onReturn); }

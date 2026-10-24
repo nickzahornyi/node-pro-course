@@ -8,12 +8,14 @@ import { checkout } from '../checkout.js';
 import { ConfirmedPublisher, connectBroker } from './publisher.js';
 import { declareTopology, PREFETCH, topology, type DemoMode } from './topology.js';
 import type { ConsumerNotice, ConsumerStats } from './consumer.js';
+import { OutboxRelay } from '../outbox/relay.js';
 
 const mode = process.argv[2] as DemoMode;
 if (!['publish', 'dlq', 'duplicate'].includes(mode)) throw new Error('Expected publish, dlq or duplicate');
 const url = process.env.BROKER_URL;
 if (!url) throw new Error('BROKER_URL is required; use scripts/with-secrets.sh or SKIP_VAULT=1');
 const names = topology(mode);
+const scope = `hw19.${mode}`;
 const workers: DemoWorker[] = [];
 
 class DemoWorker {
@@ -55,6 +57,7 @@ class DemoWorker {
 }
 
 await dataSource.initialize();
+const relay = new OutboxRelay(dataSource);
 const lock = dataSource.createQueryRunner();
 await lock.connect(); await lock.startTransaction();
 let connection: Awaited<ReturnType<typeof connectBroker>> | undefined;
@@ -63,6 +66,8 @@ try {
   // Transaction-scoped lock works through transaction-mode PgBouncer too.
   await lock.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`hw19-demo-${mode}`]);
   const fixtures = await dataSource.transaction(async manager => {
+    await manager.query('DELETE FROM processed_messages WHERE message_id IN (SELECT id FROM outbox WHERE relay_scope=$1)', [scope]);
+    await manager.query('DELETE FROM outbox WHERE relay_scope=$1', [scope]);
     const user = async (role: string) => (await manager.query(`INSERT INTO users(email,display_name,balance_cents)
       VALUES($1,$2,10000) ON CONFLICT(lower(email)) DO UPDATE SET balance_cents=10000 RETURNING id`,
     [`hw19-${mode}-${role}@demo.marketplace.invalid`, `HW19 ${mode} ${role}`]))[0].id as string;
@@ -97,7 +102,8 @@ try {
   if (mode === 'publish') {
     // The real HW14 checkout commits money/stock/order/items/job, then publishes.
     // No consumer is online yet: all five events must remain in the durable work queue.
-    for (let n = 0; n < 5; n++) await checkout(dataSource, fixtures.buyerId, fixtures.productId, 1, observedPublisher);
+    for (let n = 0; n < 5; n++) await checkout(dataSource, fixtures.buyerId, fixtures.productId, 1, { scope });
+    await relay.batch(observedPublisher, { scope });
     await depth(names.work, 5);
     const worker = new DemoWorker(); await worker.ready(); await worker.until(() => worker.stats.acked === 5); await worker.stop();
     const effect = await effectCount(), dlq = await depth(names.dlq, 0);
@@ -121,7 +127,8 @@ try {
     assert.equal(reason, 'rejected'); assert.equal(effect, 0); assert.equal(worker.stats.rejected, 1);
     for (const [key, value] of Object.entries({ rejected: worker.stats.rejected, work, dlq, 'dlq-reason': reason, effect })) console.log(`${key}=${value}`);
   } else {
-    await checkout(dataSource, fixtures.buyerId, fixtures.productId, 1, observedPublisher);
+    await checkout(dataSource, fixtures.buyerId, fixtures.productId, 1, { scope });
+    await relay.batch(observedPublisher, { scope });
     const first = new DemoWorker(true); await first.ready();
     await first.until(() => first.notices.some(notice => notice.kind === 'effect-before-ack'));
     assert.equal(await effectCount(), 1); assert.equal(first.stats.acked, 0);

@@ -99,12 +99,6 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
-        '503':
-          description: Order is committed but broker publication is unconfirmed. Retry the same request with the same Idempotency-Key.
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/Problem'
         default:
           $ref: '#/components/responses/UnexpectedError'
   /orders/{orderId}:

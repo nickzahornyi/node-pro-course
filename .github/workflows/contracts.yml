@@ -2,7 +2,7 @@ name: Marketplace tests and contracts
 on:
   pull_request:
   push:
-    branches: [main, hw-16, hw-18, hw-19]
+    branches: [main, hw-16, hw-18, hw-19, hw-22]
 permissions:
   contents: read
 defaults:
@@ -41,13 +41,16 @@ jobs:
           cache: npm
           cache-dependency-path: marketplace/package-lock.json
       - run: npm ci
-      - run: docker compose up -d --wait app order-consumer
+      - run: docker compose up -d --wait app order-consumer outbox-relay
       - name: Run all async demos twice without manual cleanup
         run: |
           for round in 1 2; do
             npm run demo:publish
             npm run demo:dlq
             npm run demo:duplicate
+            npm run demo:outbox
+            npm run demo:crash-write
+            npm run demo:crash-relay
           done
       - run: npm run test:async
       - name: Collect async service diagnostics
