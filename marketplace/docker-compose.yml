@@ -1,4 +1,54 @@
 services:
+  redis-cache:
+    image: redis:8.2-alpine
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_CACHE_PUBLISHED_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis-queue:
+    image: redis:8.2-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "127.0.0.1:${REDIS_QUEUE_PUBLISHED_PORT:-6380}:6379"
+    volumes:
+      - redis_queue_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis-worker:
+    image: ${COMPOSE_PROJECT_NAME:-marketplace}-redis-worker-ops
+    pull_policy: build
+    build:
+      context: .
+      target: ops
+    environment:
+      DB_URL: postgresql://marketplace@pgbouncer:6432/marketplace
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      REDIS_QUEUE_URL: redis://redis-queue:6379
+    volumes:
+      - db_credentials:/run/secrets:ro
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      redis-queue:
+        condition: service_healthy
+    command: ["node", "dist/redis/worker-main.js"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(require('fs').existsSync('/tmp/redis-worker-ready') ? 0 : 1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   rabbitmq:
     image: rabbitmq:4.2-management@sha256:9e9fd21d60f060acc9ecbd847cd1dcb87e6550bdb0297c27e79a40bfe1766ce4
     hostname: rabbitmq
@@ -64,14 +114,14 @@ services:
     environment:
       DB_URL: postgresql://marketplace@pgbouncer:6432/marketplace
       DB_PASSWORD_FILE: /run/secrets/db_password
-      BROKER_URL: amqp://app:app@rabbitmq:5672
+      REDIS_QUEUE_URL: redis://redis-queue:6379
     volumes:
       - db_credentials:/run/secrets:ro
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-      rabbit-bootstrap:
-        condition: service_completed_successfully
+      redis-queue:
+        condition: service_healthy
     command: ["node", "dist/outbox/relay-main.js"]
     restart: unless-stopped
     stop_grace_period: 30s
@@ -216,11 +266,17 @@ services:
       DB_POOL_MAX: 10
       AUTH_SECRET_FILE: /run/secrets/realtime_auth_secret
       BROKER_URL: amqp://app:app@rabbitmq:5672
+      REDIS_URL: redis://redis-cache:6379
+      REDIS_QUEUE_URL: redis://redis-queue:6379
     volumes:
       - db_credentials:/run/secrets:ro
     depends_on:
       bootstrap:
         condition: service_completed_successfully
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${APP_PUBLISHED_PORT:-3000}:3000"
     healthcheck:
@@ -235,6 +291,7 @@ secrets:
     file: ./db/db_password.example
 
 volumes:
+  redis_queue_data:
   rabbitmq_data:
   pact_data:
   postgres_data:

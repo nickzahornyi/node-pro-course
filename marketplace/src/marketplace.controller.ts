@@ -1,5 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Headers, NotFoundException, Post, Query, Param, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, HttpException, NotFoundException, Post, Query, Param, Res } from '@nestjs/common';
 import type { Response } from 'express';
+import { CachedProductsService } from './redis/products.service.js';
 import { DatabaseService } from './database.service.js';
 import { ProductsRepository, validId } from './repositories/products.repository.js';
 import { OrdersRepository, type ItemInput } from './repositories/orders.repository.js';
@@ -22,7 +23,7 @@ const productDto = (p: any) => ({ id: p.id, name: p.name, price_cents: Number(p.
 @Controller()
 export class MarketplaceController {
   private readonly started = Date.now();
-  constructor(private readonly db: DatabaseService, private readonly products: ProductsRepository, private readonly orders: OrdersRepository, private readonly creation: OrderCreationService) {}
+  constructor(private readonly db: DatabaseService, private readonly products: ProductsRepository, private readonly orders: OrdersRepository, private readonly creation: OrderCreationService, private readonly cachedProducts: CachedProductsService) {}
   @Get('health') health() { return { status: 'ok', uptime_seconds: Math.floor((Date.now() - this.started) / 1000) }; }
   @Get('db-health') async dbHealth() { await this.db.ping(); return { status: 'ok' }; }
   @Get('products') async listProducts(@Query('cursor') cursor?: string, @Query('limit') limit = 20) {
@@ -32,6 +33,15 @@ export class MarketplaceController {
     const product = await this.products.find(id);
     if (!product) throw new NotFoundException('Product not found');
     return productDto(product);
+  }
+  @Get('products/:productId/card') async getCard(@Param('productId') id: string) {
+    const product = await this.cachedProducts.card(id);
+    if (!product) throw new NotFoundException('Product not found');
+    return product;
+  }
+  @Get('session') getSession(@Res({ passthrough: true }) response: Response) {
+    if (!response.locals.session) throw new HttpException('Redis sessions are not configured', 503);
+    return response.locals.session;
   }
   @Get('orders') async listOrders(@Query('cursor') cursor?: string, @Query('limit') limit = 20) {
     return page((await this.orders.list(afterId(cursor), Number(limit) + 1)).filter(o => o !== null), Number(limit));

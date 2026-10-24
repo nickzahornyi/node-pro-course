@@ -7,6 +7,57 @@ security: []
 servers:
   - url: http://localhost:3000
 paths:
+  /session:
+    get:
+      operationId: getSession
+      summary: Read or create an anonymous Redis session
+      description: Renews the Redis and HttpOnly cookie idle TTL on every request. This is anonymous state, not authentication.
+      responses:
+        '200':
+          description: Session state persisted across API restarts.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [id, createdAt]
+                properties:
+                  id: { type: string }
+                  createdAt: { type: string, format: date-time }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /products/{productId}/card:
+    parameters:
+      - $ref: '#/components/parameters/ProductId'
+    get:
+      operationId: getProductCard
+      summary: Get a cached product card with sales statistics
+      description: Stock and paid or shipped sales aggregates have a bounded staleness of 360 seconds. Checkout always uses PostgreSQL.
+      responses:
+        '200':
+          description: Product card, cached for 300 to 360 seconds.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [id, name, price_cents, stock, seller_name, units_sold, orders_count]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  price_cents: { type: string, pattern: '^\d+$' }
+                  stock: { type: integer, minimum: 0 }
+                  seller_name: { type: string }
+                  units_sold: { type: string, pattern: '^\d+$' }
+                  orders_count: { type: string, pattern: '^\d+$' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
   /products:
     get:
       operationId: listProducts
@@ -24,6 +75,8 @@ paths:
                 $ref: '#/components/schemas/ProductPage'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         default:
           $ref: '#/components/responses/UnexpectedError'
   /products/{productId}:
@@ -42,6 +95,8 @@ paths:
                 $ref: '#/components/schemas/Product'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         default:
           $ref: '#/components/responses/UnexpectedError'
   /orders:
@@ -244,6 +299,16 @@ components:
       schema:
         type: string
   responses:
+    RateLimited:
+      description: The shared sliding window request limit was exceeded.
+      headers:
+        Retry-After:
+          description: Seconds until the earliest request leaves the window.
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     Unauthorized:
       description: Missing, invalid or expired identity token.
       content:
