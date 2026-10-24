@@ -2,7 +2,7 @@ import { writeFile, unlink } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import dataSource from '../data-source.js';
 import { ConfirmedPublisher } from '../async/publisher.js';
-import { relayBatch } from './relay.js';
+import { OutboxRelay } from './relay.js';
 
 const marker = '/tmp/outbox-relay-ready';
 await unlink(marker).catch(() => {});
@@ -12,13 +12,14 @@ let stopping = false;
 process.once('SIGTERM', () => { stopping = true; });
 process.once('SIGINT', () => { stopping = true; });
 let publisher: ConfirmedPublisher | undefined;
+const relay = new OutboxRelay(dataSource);
 try {
   await dataSource.initialize();
   while (!stopping) {
     try {
       publisher ??= await ConfirmedPublisher.open(url);
       await writeFile(marker, 'ready');
-      const published = await relayBatch(dataSource, publisher);
+      const published = await relay.batch(publisher);
       if (published) console.log(`relay_published=${published}`);
       if (!published) await delay(250);
     } catch {

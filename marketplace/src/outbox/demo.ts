@@ -8,7 +8,7 @@ import { OrderConsumer } from '../async/consumer.js';
 import { ConfirmedPublisher, connectBroker } from '../async/publisher.js';
 import { declareTopology, topology } from '../async/topology.js';
 import { OrderCreationService } from '../order-creation.service.js';
-import { relayBatch } from './relay.js';
+import { OutboxRelay } from './relay.js';
 
 const mode = process.argv[2];
 if (mode !== 'outbox' && mode !== 'crash-write' && mode !== 'crash-relay') throw new Error('Unknown outbox demo');
@@ -17,6 +17,7 @@ if (!url) throw new Error('BROKER_URL is required');
 const scope = `hw22.${mode}`, key = `hw22-demo-${mode}`, names = topology(mode);
 const fault = new Error('HW22 intentional crash boundary');
 await dataSource.initialize();
+const relay = new OutboxRelay(dataSource);
 const lock = dataSource.createQueryRunner();
 let connection: Awaited<ReturnType<typeof connectBroker>> | undefined;
 let publisher: ConfirmedPublisher | undefined;
@@ -87,12 +88,12 @@ try {
   let published = 0;
   const observed = { async publish(event: Parameters<ConfirmedPublisher['publish']>[0]) { await publisher!.publish(event); published++; } };
   if (mode === 'crash-relay') {
-    await assert.rejects(relayBatch(dataSource, observed, { scope, afterPublish: () => { throw fault; } }), error => error === fault);
+    await assert.rejects(relay.batch(observed, { scope, afterPublish: () => { throw fault; } }), error => error === fault);
     assert.equal(published, 1);
     assert.equal(await scalar('SELECT count(*)::int AS n FROM outbox WHERE relay_scope=$1 AND published_at IS NULL', [scope]), 1);
     assert.equal((await admin.checkQueue(names.work)).messageCount, 1);
   }
-  await relayBatch(dataSource, observed, { scope });
+  await relay.batch(observed, { scope });
   const expected = mode === 'crash-write' ? 0 : mode === 'crash-relay' ? 2 : 1;
   assert.equal(published, expected);
   assert.equal((await admin.checkQueue(names.work)).messageCount, expected);

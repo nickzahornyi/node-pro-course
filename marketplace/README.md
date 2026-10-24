@@ -38,7 +38,8 @@ Idempotency-Key ідентифікує **намір**, не hash тіла: trans
 узгодженого строку зберігання API-ключів: після видалення старий ключ стане новим наміром.
 
 `outbox-relay` у Compose запускає `src/outbox/relay-main.ts`: polling 250 мс
-на порожній вибірці, batch 10. `relayBatch()` відкриває транзакцію на одному
+на порожній вибірці, batch до 5. Один `OutboxRelay` живе весь цикл воркера,
+включно з перепідключеннями брокера. `batch()` відкриває транзакцію на одному
 з'єднанні й виконує:
 
 ```sql
@@ -49,12 +50,16 @@ ORDER BY created_at,id LIMIT $2 FOR UPDATE SKIP LOCKED;
 UPDATE outbox SET published_at=clock_timestamp(),attempts=attempts+1 WHERE id=$1;
 ```
 
-Lock утримується до COMMIT/ROLLBACK. Confirm + mandatory/basic.return із HW-19
+Lock утримується до COMMIT/ROLLBACK; confirm timeout — 2 с на подію,
+тобто до 10 с очікування confirm на batch. Confirm + mandatory/basic.return із HW-19
 залишаються: без binding relay не позначить подію published. При помилці
 транзакція відкочується, pending row лишається; воркер відновлює канал і повторює
 спробу через 1 с. `attempts` рахує успішні та **спостережені** невдалі спроби
-(помилки записуються окремо після rollback), не є точним ledger доставок:
-SIGKILL не може оновити лічильник. Помилка наприкінці batch може повторити
+(помилки накопичуються в пам'яті й записуються на початку наступного `batch()`
+короткою транзакцією з `FOR UPDATE SKIP LOCKED`, до 5 рядків за раз).
+Зайняті рядки пропускаються до наступного виклику, опубліковані теж можна дорахувати.
+Це не точний ledger доставок: рестарт/SIGKILL втрачає ще не записані спостереження.
+Помилка наприкінці batch може повторити
 кілька вже опублікованих подій — consumer має дедуплікувати кожну з них.
 Readiness marker прибирається при помилці, на старті й при завершенні.
 
@@ -220,7 +225,7 @@ UUID `orders.placed_event_id` і час створення зберігають�
 UUID, час і межі ID; споживач також звіряє покупця, суму й UUID із committed order.
 
 `ConfirmedPublisher` використовує `createConfirmChannel`, persistent повідомлення,
-`mandatory: true`, слухач `return` та `waitForConfirms` з таймаутом 10 секунд.
+`mandatory: true`, слухач `return` та `waitForConfirms` з таймаутом 2 секунди.
 Позитивний confirm без відповідного binding **не** вважається успіхом: mandatory
 return завершує публікацію помилкою. Для HTTP це 503 problem+json після вже
 збереженого order; повторюйте POST із **тим самим** Idempotency-Key, щоб

@@ -8,7 +8,7 @@ import { checkout } from '../checkout.js';
 import { ConfirmedPublisher, connectBroker } from './publisher.js';
 import { declareTopology, PREFETCH, topology, type DemoMode } from './topology.js';
 import type { ConsumerNotice, ConsumerStats } from './consumer.js';
-import { relayBatch } from '../outbox/relay.js';
+import { OutboxRelay } from '../outbox/relay.js';
 
 const mode = process.argv[2] as DemoMode;
 if (!['publish', 'dlq', 'duplicate'].includes(mode)) throw new Error('Expected publish, dlq or duplicate');
@@ -57,6 +57,7 @@ class DemoWorker {
 }
 
 await dataSource.initialize();
+const relay = new OutboxRelay(dataSource);
 const lock = dataSource.createQueryRunner();
 await lock.connect(); await lock.startTransaction();
 let connection: Awaited<ReturnType<typeof connectBroker>> | undefined;
@@ -102,7 +103,7 @@ try {
     // The real HW14 checkout commits money/stock/order/items/job, then publishes.
     // No consumer is online yet: all five events must remain in the durable work queue.
     for (let n = 0; n < 5; n++) await checkout(dataSource, fixtures.buyerId, fixtures.productId, 1, { scope });
-    await relayBatch(dataSource, observedPublisher, { scope });
+    await relay.batch(observedPublisher, { scope });
     await depth(names.work, 5);
     const worker = new DemoWorker(); await worker.ready(); await worker.until(() => worker.stats.acked === 5); await worker.stop();
     const effect = await effectCount(), dlq = await depth(names.dlq, 0);
@@ -127,7 +128,7 @@ try {
     for (const [key, value] of Object.entries({ rejected: worker.stats.rejected, work, dlq, 'dlq-reason': reason, effect })) console.log(`${key}=${value}`);
   } else {
     await checkout(dataSource, fixtures.buyerId, fixtures.productId, 1, { scope });
-    await relayBatch(dataSource, observedPublisher, { scope });
+    await relay.batch(observedPublisher, { scope });
     const first = new DemoWorker(true); await first.ready();
     await first.until(() => first.notices.some(notice => notice.kind === 'effect-before-ack'));
     assert.equal(await effectCount(), 1); assert.equal(first.stats.acked, 0);

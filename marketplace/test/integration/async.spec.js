@@ -11,9 +11,9 @@ import { OrderItem } from '../../dist/entities/order-item.entity.js';
 import { Job } from '../../dist/entities/job.entity.js';
 import { checkout } from '../../dist/checkout.js';
 import { applyOrderPlaced } from '../../dist/async/effect.js';
-import { relayBatch } from '../../dist/outbox/relay.js';
+import { OutboxRelay } from '../../dist/outbox/relay.js';
 
-let database, ds, buyer, product;
+let database, ds, buyer, product, relay;
 beforeAll(async () => {
   database = await startDatabase();
   ds = new DataSource({ type: 'postgres', url: database.container.getConnectionUri(),
@@ -22,6 +22,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await ds?.destroy(); await database?.stop(); });
 beforeEach(async () => {
+  relay = new OutboxRelay(ds);
   await truncate(database.pool);
   buyer = await insertUser(database.pool);
   product = (await database.pool.query("INSERT INTO products(seller_id,name,price_cents,stock) VALUES($1,'Async test',1250,10) RETURNING *", [buyer.id])).rows[0];
@@ -31,7 +32,7 @@ it('commits order and stable outbox envelope together, then relays after COMMIT'
   let event;
   const id = await checkout(ds, buyer.id, product.id, 2);
   expect((await database.pool.query('SELECT count(*)::int AS n FROM outbox WHERE published_at IS NULL')).rows[0].n).toBe(1);
-  await relayBatch(ds, { async publish(value) {
+  await relay.batch({ async publish(value) {
     event = value;
     // Different connection: uncommitted orders would not be visible here.
     const row = (await database.pool.query('SELECT * FROM orders WHERE id=$1', [value.data.orderId])).rows[0];
@@ -57,11 +58,18 @@ it('rolls back business + outbox after enqueue; broker failure leaves a committe
   expect((await database.pool.query('SELECT stock FROM products')).rows[0].stock).toBe(10);
   expect(calls).toBe(0);
   await checkout(ds, buyer.id, product.id);
-  await expect(relayBatch(ds, publisher)).rejects.toThrow('broker unavailable');
+  await expect(relay.batch(publisher)).rejects.toThrow('broker unavailable');
   expect(calls).toBe(1);
   expect((await database.pool.query('SELECT count(*)::int AS n FROM orders')).rows[0].n).toBe(1);
   expect((await database.pool.query('SELECT stock FROM products')).rows[0].stock).toBe(9);
-  expect((await database.pool.query('SELECT published_at,attempts FROM outbox')).rows[0]).toEqual({ published_at: null, attempts: 1 });
+  expect((await database.pool.query('SELECT published_at,attempts FROM outbox')).rows[0]).toEqual({ published_at: null, attempts: 0 });
+  // The next call commits the prior failure even if publishing fails again.
+  await expect(relay.batch(publisher)).rejects.toThrow('broker unavailable');
+  expect((await database.pool.query('SELECT attempts FROM outbox')).rows[0].attempts).toBe(1);
+  expect(await relay.batch({ async publish() {} })).toBe(1);
+  expect((await database.pool.query('SELECT attempts FROM outbox')).rows[0].attempts).toBe(3);
+  expect(await relay.batch({ async publish() {} })).toBe(0);
+  expect((await database.pool.query('SELECT attempts FROM outbox')).rows[0].attempts).toBe(3);
 });
 
 it('rejects forged order data before applying any effect', async () => {
@@ -105,10 +113,10 @@ it('parallel relays skip locked rows rather than blocking on a stalled publisher
   const held = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });
   const ids = [];
-  const first = relayBatch(ds, { async publish(event) { ids.push(event.eventId); entered(); await held; } }, { batchSize: 1 });
+  const first = relay.batch({ async publish(event) { ids.push(event.eventId); entered(); await held; } }, { batchSize: 1 });
   try {
     await started;
-    expect(await relayBatch(ds, { async publish(event) { ids.push(event.eventId); } }, { batchSize: 1 })).toBe(1);
+    expect(await new OutboxRelay(ds).batch({ async publish(event) { ids.push(event.eventId); } }, { batchSize: 1 })).toBe(1);
   } finally { release(); await first; }
   expect(new Set(ids).size).toBe(2);
   expect((await database.pool.query('SELECT count(*)::int AS n FROM outbox WHERE published_at IS NOT NULL')).rows[0].n).toBe(2);
@@ -118,10 +126,40 @@ it('crash after confirmed publish leaves pending row; retry delivers twice but a
   await checkout(ds, buyer.id, product.id);
   const events = [];
   const publisher = { async publish(event) { events.push(event); } };
-  await expect(relayBatch(ds, publisher, { afterPublish() { throw new Error('relay crash'); } })).rejects.toThrow('relay crash');
+  await expect(relay.batch(publisher, { afterPublish() { throw new Error('relay crash'); } })).rejects.toThrow('relay crash');
   expect((await database.pool.query('SELECT published_at FROM outbox')).rows[0].published_at).toBeNull();
-  await relayBatch(ds, publisher);
+  await relay.batch(publisher);
   expect(events).toHaveLength(2); expect(events[0]).toEqual(events[1]);
   const effects = await Promise.all(events.map(event => applyOrderPlaced(ds, event)));
   expect(effects.filter(Boolean)).toHaveLength(1);
+});
+
+it('defers failure accounting while another relay holds the row, then counts it after publication', async () => {
+  await checkout(ds, buyer.id, product.id);
+  await expect(relay.batch({ async publish() { throw new Error('broker unavailable'); } })).rejects.toThrow('broker unavailable');
+  let release, entered, timer;
+  const held = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const other = new OutboxRelay(ds).batch({ async publish() { entered(); await held; } });
+  try {
+    await started;
+    const retry = relay.batch({ async publish() { throw new Error('Locked row must be skipped'); } });
+    expect(await Promise.race([retry, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Failure accounting blocked on another relay')), 1500);
+    })])).toBe(0);
+    expect((await database.pool.query('SELECT attempts FROM outbox')).rows[0].attempts).toBe(0);
+  } finally { clearTimeout(timer); release(); await other; }
+  expect(await relay.batch({ async publish() { throw new Error('Published row must not be redelivered'); } })).toBe(0);
+  expect((await database.pool.query('SELECT attempts FROM outbox')).rows[0].attempts).toBe(2);
+  await relay.batch({ async publish() {} });
+  expect((await database.pool.query('SELECT attempts FROM outbox')).rows[0].attempts).toBe(2);
+});
+
+it('limits default and explicit batches to five events', async () => {
+  for (let n = 0; n < 6; n++) await checkout(ds, buyer.id, product.id);
+  const publisher = { async publish() {} };
+  await expect(relay.batch(publisher, { batchSize: 6 })).rejects.toThrow('batchSize must be 1..5');
+  expect(await relay.batch(publisher)).toBe(5);
+  expect((await database.pool.query('SELECT count(*)::int AS n FROM outbox WHERE published_at IS NULL')).rows[0].n).toBe(1);
+  expect(await relay.batch(publisher)).toBe(1);
 });
