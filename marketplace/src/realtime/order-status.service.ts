@@ -3,6 +3,7 @@ import { DatabaseService } from '../database.service.js';
 import type { OrderStatus } from '../entities/order.entity.js';
 import { validId } from '../repositories/products.repository.js';
 import { OrderEventsService } from './order-events.service.js';
+import { invalidateProductCards } from '../redis/invalidate-products.js';
 
 @Injectable()
 export class OrderStatusService {
@@ -18,11 +19,15 @@ export class OrderStatusService {
         if (!order) throw new NotFoundException('Order not found');
         if (order.user_id !== userId) throw new ForbiddenException('Order belongs to another user');
         if (order.status !== status) await client.query('UPDATE orders SET status=$2 WHERE id=$1', [id, status]);
-        return { order_id: id, previous_status: order.status as OrderStatus, status, changed: order.status !== status };
+        const { rows: items } = await client.query('SELECT product_id FROM order_items WHERE order_id=$1', [id]);
+        return { order_id: id, previous_status: order.status as OrderStatus, status, changed: order.status !== status,
+          productIds: items.map((item: { product_id: string }) => item.product_id) };
       });
       // DatabaseService.transaction has already completed COMMIT: no phantom rollback events.
       const event = result.changed ? this.events.publish({ order_id: id, previous_status: result.previous_status, status }) : null;
-      return { ...result, event_id: event?.id ?? null };
+      if (result.changed) await invalidateProductCards(result.productIds);
+      const { productIds, ...response } = result;
+      return { ...response, event_id: event?.id ?? null };
     });
   }
 

@@ -2,6 +2,7 @@ import { Injectable, UnprocessableEntityException } from '@nestjs/common';
 import { DatabaseService } from './database.service.js';
 import { OrdersRepository, type ItemInput } from './repositories/orders.repository.js';
 import { enqueueOrder, type WriteOptions } from './outbox/write.js';
+import { invalidateProductCards } from './redis/invalidate-products.js';
 
 @Injectable()
 export class OrderCreationService {
@@ -27,6 +28,7 @@ export class OrderCreationService {
       await enqueueOrder((sql, args) => client.query(sql, args), row, options);
       return { order, replay: false };
     });
+    if (!result.replay) await invalidateProductCards(body.items.map(item => item.product_id));
     return result;
   }
 }

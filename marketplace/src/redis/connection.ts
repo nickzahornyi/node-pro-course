@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import { Redis, type RedisOptions } from 'ioredis';
 
 export function redisOptions(url: string, worker = false) {
   const parsed = new URL(url);
@@ -16,8 +16,8 @@ export function redisOptions(url: string, worker = false) {
   };
 }
 
-export function connectRedis(url: string): Redis {
-  const redis = new Redis({ ...redisOptions(url), lazyConnect: true });
+export function connectRedis(url: string, options: RedisOptions = {}): Redis {
+  const redis = new Redis({ ...redisOptions(url), ...options, lazyConnect: true });
   // Connection failures are surfaced by commands; never log credential-bearing URLs.
   redis.on('error', () => {});
   return redis;

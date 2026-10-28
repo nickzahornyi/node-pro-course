@@ -16,10 +16,12 @@ export function rateLimitMiddleware(limiter: RedisRateLimiter): RequestHandler {
   };
 }
 
-export function sessionMiddleware(sessions: RedisSessions): RequestHandler {
+export function sessionMiddleware(sessions: RedisSessions, create = false): RequestHandler {
   return (request, response, next) => {
     const id = request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('sid='))?.slice(4);
-    void sessions.touch(id).then(session => {
+    if (!id && !create) { next(); return; }
+    void sessions.touch(id, create).then(session => {
+      if (!session) { next(); return; }
       response.cookie('sid', session.id, { httpOnly: true, sameSite: 'lax',
         secure: process.env.NODE_ENV === 'production', maxAge: sessions.ttlSeconds * 1000, path: '/' });
       response.locals.session = session;

@@ -9,7 +9,7 @@ const redis = connectRedis(requiredUrl('REDIS_QUEUE_URL'));
 await redis.connect();
 const app = express();
 if (mode === 'session') {
-  app.use(sessionMiddleware(new RedisSessions(redis, prefix, 10)));
+  app.use(sessionMiddleware(new RedisSessions(redis, prefix, 10), true));
   app.get('/', (_request, response) => response.json(response.locals.session));
 } else if (mode === 'ratelimit') {
   app.use(rateLimitMiddleware(new RedisRateLimiter(redis, prefix, 5, 30000)));

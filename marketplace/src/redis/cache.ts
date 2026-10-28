@@ -4,6 +4,8 @@ import type { Redis } from 'ioredis';
 
 export const RELEASE_LOCK = `if redis.call('GET',KEYS[1]) == ARGV[1] then
   return redis.call('DEL',KEYS[1]) else return 0 end`;
+export const PUBLISH_CACHE = `if redis.call('GET',KEYS[1]) == ARGV[1] then
+  return redis.call('SET',KEYS[2],ARGV[2],'EX',ARGV[3]) else return 0 end`;
 
 export class AsideCache {
   constructor(private readonly redis: Redis, readonly prefix = 'shop:card:v1:',
@@ -28,7 +30,8 @@ export class AsideCache {
           try { hit = await this.redis.get(key); } catch {}
           if (hit !== null) return JSON.parse(hit) as T;
           const value = await load();
-          try { await this.redis.set(key, JSON.stringify(value), 'EX', 300 + randomInt(61)); } catch {}
+          // Invalidation removes this lease too: an older in-flight read cannot refill the key.
+          try { await this.redis.eval(PUBLISH_CACHE, 2, lock, key, token, JSON.stringify(value), 300 + randomInt(61)); } catch {}
           return value;
         } finally {
           try { await this.redis.eval(RELEASE_LOCK, 1, lock, token); } catch {}

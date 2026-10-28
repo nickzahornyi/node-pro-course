@@ -19,10 +19,12 @@ class ProblemFilter implements ExceptionFilter {
 export function configureApp(app: INestApplication): void {
   app.use(express.json());
   const redis = app.get(RedisService);
-  if (redis.limiter) app.use(['/products', '/session'], rateLimitMiddleware(redis.limiter));
+  if (redis.limiter) app.use(['/products', '/session', '/orders'], rateLimitMiddleware(redis.limiter));
   if (redis.sessions) app.use((request: express.Request, response: express.Response, next: express.NextFunction) => {
     if (/^\/(health|db-health)(\?|$)/.test(request.originalUrl)) { next(); return; }
-    return sessionMiddleware(redis.sessions!)(request, response, next);
+    // Only the explicit, rate-limited session endpoint may allocate anonymous state.
+    const create = request.method === 'GET' && /^\/session\/?(\?|$)/.test(request.originalUrl);
+    return sessionMiddleware(redis.sessions!, create)(request, response, next);
   });
   // Signed bearer identity and ownership are enforced by OrderAccessService;
   // OpenAPI still validates request bodies, headers and response schemas.
