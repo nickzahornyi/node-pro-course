@@ -1,6 +1,6 @@
 # Marketplace API contract
 
-Для поточного ДЗ **HW-22** починайте з [Outbox та ідемпотентність](#outbox-та-ідемпотентність) та [Grading](#grading).
+Для поточного ДЗ **HW-23** починайте з [Redis: кеш, сесії, ліміти, черга](#redis-кеш-сесії-ліміти-черга) та [Grading](#grading).
 Усі npm/Compose-команди виконуються в `marketplace/` після клонування репозиторію.
 Розділ HW-12 нижче збережено як окремий SQL-стенд попереднього завдання.
 
@@ -9,7 +9,146 @@ Nest-застосунок використовує `express-openapi-validator` �
 
 Публічний POST `/orders` створює draft: початковий контракт не містить покупця чи оплати, тому використовується технічний гостьовий користувач, без списання балансу й запасів. Транзакційний оплачуваний checkout із HW-14 залишається окремим сценарієм `src/checkout.ts`. ID товару беріть із GET `/products` (після seed, наприклад, `1`).
 
+## Redis: кеш, сесії, ліміти, черга
+
+Гілка `hw-23`, збірка `tsc`, BullMQ 6, ioredis 5, TypeScript `~6.0.3`.
+`GET /products/:productId/card` читає картку з продавцем, залишком та агрегатами
+продажів paid/shipped через JOIN/LATERAL у PostgreSQL. Це дорожче за старий
+простий `GET /products/:productId`, контракт якого збережений. Bigint суми й
+лічильники нової картки — рядки. Cache-aside у `src/redis/cache.ts`: промах →
+SQL → `SET EX`, влучання → Redis. Кожен запис отримує TTL `300 + randomInt(61)`:
+300–360 с. Після успішного COMMIT checkout, створення order та зміна статусу
+замовлення видаляють картки всіх зачеплених товарів. Rollback і idempotent replay
+не інвалідують кеш. DEL атомарно видаляє також cache-fill lease; запис кеша через
+Lua перевіряє власника lease, тому читач, що почав роботу до COMMIT, не відновить
+старе значення після інвалідації. Помилка Redis не скасовує committed order:
+TTL лишається резервним обмеженням застарілості. Checkout завжди перевіряє
+актуальний залишок у транзакції PostgreSQL.
+
+На холодному ключі `SET lock:… token NX PX 10000` обирає одного читача, решта
+чекає 20–40 мс й перечитує кеш. Після захоплення є повторний GET, щоб запізнілий
+клієнт не робив зайвий SQL. Звільнення — тільки Lua compare-and-delete свого
+токена. Очікування обмежене 12 с; помилка Redis, OOM на записі чи зникнення лока
+дають fallback до БД. Помилки самої БД поширюються без прихованого повтору.
+
+**Якщо stampede-лок зламається**, кілька клієнтів одночасно прочитають БД і
+запишуть кеш: зростуть навантаження та можлива застарілість картки. Це прийнятно
+для похідних даних, оскільки кеш не підтверджує оплату й не списує stock.
+Пауза процесу довша за TTL або eviction може дозволити двох власників; compare-
+and-delete захищає лише звільнення чужого лока. Бізнес-інваріанти залишаються
+в SQL-транзакціях та UNIQUE/inbox. Для захисту записів локом знадобився б fencing
+із перевіркою монотонного токена самим сховищем, а не GET перед записом.
+
+Compose містить **два процеси Redis**: `redis-cache` на 6379 із `maxmemory 64mb`,
+`allkeys-lru`, без persistence; `redis-queue` на 6380 із `maxmemory 256mb`,
+`noeviction`, AOF `everysec` та власним volume. Політика пам'яті спільна для всіх
+logical DB одного процесу, тому SELECT не розділив би ці вимоги. BullMQ не може
+надійно працювати при довільному eviction його ключів —
+[документація BullMQ](https://docs.bullmq.io/guide/going-to-production).
+При заповненні queue-інстансу записи отримають OOM: потрібні моніторинг пам'яті,
+retention і capacity planning. AOF everysec допускає втрату приблизно останньої
+секунди при аварії самого Redis; це не гарантія exactly-once доставки.
+
+**Сесії та лімітер розміщені в `redis-queue`**, щоб LRU не розлогінював людей і
+не скидав ліміти. `GET /session` створює анонімний стан, cookie `sid` — випадкові
+256 біт, HttpOnly, SameSite=Lax, Secure у production. Сесія читається на кожному
+прикладному HTTP-запиті через `GETEX EX 1800`; cookie також оновлює Max-Age.
+Нові сесії виділяються лише явним GET /session під спільним rate-limit.
+Інші маршрути без cookie пропускають session store; невалідний або протухлий sid
+не створює заміну. Запити з чинним sid подовжують наявну сесію. Healthchecks
+виключені. Це ще не авторизація, особа з cookie не визначається.
+Без REDIS-змінних попередні DB-only сценарії працюють, `/session` повертає 503;
+при налаштованому, але недоступному state Redis старт або запит завершується
+помилкою, без переходу до пам'яті процесу.
+
+Ліміт для `/products`, `/session` та `/orders` (включно з POST) — **ковзне вікно 100 запитів / 60 с на IP**:
+дозволяємо до 100 одразу, але не подвійний сплеск на межі фіксованих вікон.
+Redis TIME та один Lua-script атомарно видаляють старі записи, рахують і додають
+новий запит; усі поди мають спільні ключі. Відмова — HTTP 429 з Retry-After в
+секундах. X-Forwarded-For не довіряємо: за reverse proxy треба явно налаштувати
+trusted proxy, інакше клієнти цього proxy ділитимуть один IP-ліміт.
+
+**Одна прикладна черга `shop-order-work`** отримує ту саму `order.placed` з outbox
+HW-22: relay → BullMQ `add` → UPDATE published_at → COMMIT. При збої між add і
+COMMIT relay повторить eventId; `jobId=eventId` дає одну задачу. Створення order
+не виконує queue.add і не чекає воркера; session middleware окремо читає Redis.
+`redis-worker` застосовує
+існуючий durable notification-effect та inbox в одній PostgreSQL-транзакції;
+RabbitMQ із попередніх ДЗ збережений для регресійних демо, а Compose relay HW-23
+використовує BullMQ. Самостійний relay без REDIS_QUEUE_URL зберігає Rabbit fallback.
+
+П'ять спроб, exponential backoff від 1000 мс із jitter 0.5; завершені jobs
+зберігаються 24 години, failed — 7 днів, тому removeOnComplete не вимикає дедуп
+миттєво. Прибирання вікове й ліниве; воно виконується при наступних завершеннях.
+Повтор після видалення jobId або рестарту воркера все одно зупиняє SQL inbox.
+Один стабільний `upsertJobScheduler('outbox-sweep-v1', {every: 60000}, …)`
+періодично підхоплює pending outbox у цій самій черзі; рестарти не створюють
+додаткових schedulers. Використаний актуальний
+[Job Schedulers API](https://docs.bullmq.io/guide/job-schedulers/).
+Worker connection має `maxRetriesPerRequest: null`, producer — обмежені повтори.
+
+У тому самому Infisical dev/prod, де вже є DB_URL/DB_PASSWORD, додайте
+`REDIS_URL` і `REDIS_QUEUE_URL`. Для локального dev значення наведені в Grading,
+у Docker адреси — `redis://redis-cache:6379` та `redis://redis-queue:6379`.
+У production використовуйте власні credentials/TLS. Нових env-файлів немає:
+`.env.example` — тільки контракт; усі чотири demo-скрипти починаються з
+`bash scripts/with-secrets.sh dev …`. Наявну обгортку й SKIP_VAULT не змінено.
+Live Infisical не перевірений: обліковий запис ще не налаштований.
+
+Демо самоочисні: UUID-префікси Redis і власні SQL fixtures; жодного FLUSHDB,
+TRUNCATE чи видалення прикладної черги. Cache-demo рахує SQL у TypeORM logger,
+а не виклики cache API, використовує чотири незалежні Redis-з'єднання. Session-demo
+робить три HTTP-запити з паузами 1.5/1.1 с і справжнім перезапуском дочірнього
+процесу. Rate-demo піднімає два окремі HTTP-процеси. Queue-demo проводить реальний
+checkout через outbox, імітує збій relay після add, двічі падає у worker, перевіряє
+один committed notification та двічі upsert-ить той самий scheduler; інтервали
+500 мс і backoff 100 мс скорочені тільки в ізольованому demo.
+
+Власні прогони **2026-10-24**: ізольований Compose project
+`marketplace-hw23-check`, нові volumes, Redis 8.2, PostgreSQL 17. Повний
+`docker compose up -d --wait` — exit 0. Усі чотири демо двічі підряд, без ручного
+очищення, exit 0. Runtime CONFIG GET підтвердив різні політики двох інстансів.
+
+| Демо | Перший прогін | Другий прогін |
+| --- | --- | --- |
+| cache | warmed=64, ttl-distinct=41, concurrent=30, db-calls=1, db-calls-warm=0 | ті самі інваріанти, ttl-distinct=39 |
+| session | requests=3, sessions=1, in-redis=1, ttl-renewed=1 | так само |
+| ratelimit | instances=2, limit=5, requests=20, allowed=5, blocked=15, status=429, retry-after=1 | так само |
+| queue | attempts=3, completed=1, added=2, queued=1, schedulers=1, scheduled-runs=2 | так само |
+
+`cache-lru=1`, `cache-maxmemory=1`, `queue-noeviction=1` в обох прогонах.
+Перевірено також чужий токен при release лока, один SQL inbox/notification-ефект
+після повтору, відсутність demo-ключів після завершення. `npm ci`, `tsc --noEmit`,
+check:env і API lint — exit 0 (lint має три попередні warnings). Unit — 44/44,
+integration — 17/17, E2E — 13/13, live async — 3/3. Новий `npm run test:redis`
+— 2/2: справжній Nest/OpenAPI endpoint читає агрегати, віддає кеш до інвалідації
+та поновлює Redis TTL і cookie. Трекнутих env-файлів із живими URL credentials немає.
+Окремо перевірено коротку зупинку кожного Redis: кеш віддає SQL-результат під час
+збою й знову наповнюється після reconnect; сесія переживає рестарт Redis через
+AOF, API та worker відновлюють роботу. Три crash/outbox-демо HW-22 теж exit 0.
+GitHub CI має окремий Redis job із двома колами демо та test:redis.
+
+### Виправлення за ревʼю HW-23 (2026-10-28)
+
+Сесії створюються лише на GET /session; звичайні cookie-less запити й невідомі sid
+не наповнюють noeviction Redis. POST /orders використовує спільний IP-ліміт
+із каталогом і сесіями. Інвалідація карток виконується після COMMIT у checkout,
+створенні order та зміні статусу; старий незавершений cache fill не може
+перезаписати вже оновлену картку. Live Redis HTTP-тести додатково перевіряють
+відсутність нових session keys, інвалідацію після запису, збереження кеша після
+rollback/replay, конкурентний старий cache fill і HTTP 429/Retry-After на POST.
+
+Прогін 2026-10-28 на ізольованому marketplace-hw23-review: live Redis HTTP 7/7,
+unit 44/44, E2E 13/13, TypeScript build та OpenAPI lint exit 0. Усі чотири демо
+exit 0: cache db-calls=1/db-calls-warm=0, warmed=64, ttl-distinct=41; решта
+інваріантів збережена. POST-тест навмисно вичерпує 60-секундний бюджет IP
+тестового клієнта; запускайте його на окремому стенді після решти HTTP-перевірок.
+
 ## Outbox та ідемпотентність
+
+Історичний опис HW-22: транзакції, inbox та crash-демо збережені. У поточному
+HW-23 Compose relay використовує BullMQ, як описано вище; наведений нижче Rabbit
+transport доступний для регресії й як fallback без REDIS_QUEUE_URL.
 
 Гілка `hw-22`, PostgreSQL + окремий RabbitMQ із Compose. Один COMMIT тепер
 містить business order та outbox, а не network publish. Міграція
@@ -674,44 +813,65 @@ Runtime-образ містить production-залежності, `dist`, OpenA
 
 `cd marketplace` — перша команда після клону репозиторію; усі команди нижче виконуються в цьому каталозі з `package.json`.
 
-Поточний HW-22: Node.js 22+, Docker Desktop; вільні порти 5432, 6432, 3000,
-5672, 15672 і 9292. На свіжому клоні з каталогу сервісу:
+Поточний HW-23: Node.js 22+, Docker Desktop; вільні порти 5432, 6432, 3000,
+6379, 6380, 5672, 15672 і 9292. Порти Redis не належать діапазону лекції 22300–22399.
+На свіжому клоні:
 
 ```bash
-cd marketplace # перша команда після клону, лише якщо ви ще в корені репозиторію
+cd marketplace # лише якщо ви ще в корені репозиторію
 npm ci
 docker compose up -d --wait
 export DB_URL=postgresql://marketplace@127.0.0.1:6432/marketplace
 export DB_PASSWORD=marketplace-local-password
-export BROKER_URL=amqp://app:app@127.0.0.1:5672
-export SKIP_VAULT=1
+export REDIS_URL=redis://127.0.0.1:6379
+export REDIS_QUEUE_URL=redis://127.0.0.1:6380
+export SKIP_VAULT=1 # у грейдера немає доступу до Infisical
 npx tsc --noEmit
+npm run demo:cache
+npm run demo:session
+npm run demo:ratelimit
+npm run demo:queue
+# Повторіть чотири демо без ручного очищення.
+```
+
+Compose сам збирає образи, генерує dev credentials у named volume, запускає
+міграції/seed до API, чекає healthchecks обох Redis і запускає BullMQ worker.
+`--wait` обов'язковий. Кожне демо саме компілює TypeScript. Для окремого чистого
+стенду задайте `COMPOSE_PROJECT_NAME=marketplace-hw23`; старі volumes не видаляйте,
+якщо там потрібні дані або вже ротований пароль.
+
+Redis-порти можна змінити через `REDIS_CACHE_PUBLISHED_PORT` і
+`REDIS_QUEUE_PUBLISHED_PORT`; тоді змініть порти REDIS_URL/REDIS_QUEUE_URL відповідно.
+Інші overrides: DB_PUBLISHED_PORT, PGBOUNCER_PUBLISHED_PORT, APP_PUBLISHED_PORT,
+BROKER_PUBLISHED_PORT, RABBITMQ_MANAGEMENT_PUBLISHED_PORT, PACT_BROKER_PUBLISHED_PORT.
+DB_URL указує на PgBouncer (6432), без пароля; DB_PASSWORD береться з dev Compose.
+Якщо потрібні тільки чотири демо без повного стеку:
+
+```bash
+docker compose up -d --wait redis-cache redis-queue pgbouncer
+npm run build
+npm run migrate
+# Далі ті самі demo:* і змінні вище; seed не потрібний.
+```
+
+Регресія попередніх ДЗ на повному стенді:
+
+```bash
+export BROKER_URL=amqp://app:app@127.0.0.1:5672
 npm run demo:outbox
 npm run demo:crash-write
 npm run demo:crash-relay
-# Повторити ці три демо можна без ручного очищення.
-# Регресія HW-19:
 npm run demo:publish
 npm run demo:dlq
 npm run demo:duplicate
-# Повторити ці три демо можна без ручного очищення.
-npm run build && npm run test:async
-npm test && npm run test:integration && npm run test:e2e
+npm run test:async
+npm run test:redis
+npm test
+npm run test:integration
+npm run test:e2e
 npm run check:env
+npm run lint:api
 ```
-
-Compose сам збирає multi-stage образи, генерує dev credentials у named volume,
-мігрує/seed БД до старту app, виконує Rabbit bootstrap до старту order-consumer
-та outbox-relay. App більше не залежить від готовності брокера.
-Rabbit healthcheck: `rabbitmq-diagnostics -q check_running`. Нові demo самі
-компілюють TypeScript, тому `tsc --noEmit` перед ними достатньо. Консоль management:
-`http://127.0.0.1:15672` (локальні app/app). Для окремого стенду задайте
-`COMPOSE_PROJECT_NAME=marketplace-hw22`; для зайнятих портів використовуйте
-`BROKER_PUBLISHED_PORT`, `RABBITMQ_MANAGEMENT_PUBLISHED_PORT`,
-`DB_PUBLISHED_PORT`, `PGBOUNCER_PUBLISHED_PORT`, `APP_PUBLISHED_PORT`,
-`PACT_BROKER_PUBLISHED_PORT` та відповідно змініть `BROKER_URL`, `DB_URL`,
-`ASYNC_API_URL` для `test:async`. У нашому HW-22 прогоні: broker 56759, DB через
-PgBouncer 56459, API 53039; перший `docker compose up -d --wait` exit 0.
 
 GitHub workflow знаходиться у корені Git-репозиторію:
 `../.github/workflows/contracts.yml`, із `working-directory: marketplace`.

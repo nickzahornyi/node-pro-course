@@ -11,11 +11,13 @@ import { OrderStatusService } from './realtime/order-status.service.js';
 import { OrdersGateway } from './realtime/orders.gateway.js';
 import { OrderRealtimeController } from './realtime/order-realtime.controller.js';
 import { OrderCreationService } from './order-creation.service.js';
+import { RedisService } from './redis/service.js';
+import { CachedProductsService } from './redis/products.service.js';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true, validate, ignoreEnvFile: process.env.NODE_ENV === 'test' })],
   controllers: [MarketplaceController, OrderRealtimeController],
-  providers: [DatabaseService, ProductsRepository, OrdersRepository, OrderAccessService, OrderEventsService, OrderStatusService, OrdersGateway, OrderCreationService],
+  providers: [DatabaseService, ProductsRepository, OrdersRepository, OrderAccessService, OrderEventsService, OrderStatusService, OrdersGateway, OrderCreationService, RedisService, CachedProductsService],
   exports: [DatabaseService],
 })
 export class AppModule {}

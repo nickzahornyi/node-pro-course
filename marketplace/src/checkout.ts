@@ -4,6 +4,7 @@ import { User } from './entities/user.entity.js';
 import { Order } from './entities/order.entity.js';
 import type { PlacedOrderRow } from './async/order-placed.js';
 import { enqueueOrder, type WriteOptions } from './outbox/write.js';
+import { invalidateProductCards } from './redis/invalidate-products.js';
 
 export class CheckoutError extends Error {
   constructor(public readonly code: 'OUT_OF_STOCK' | 'INSUFFICIENT_FUNDS') { super(code); }
@@ -38,5 +39,6 @@ export async function checkout(db: DataSource, buyerId: string, productId: strin
     await enqueueOrder((sql, args) => manager.query(sql, args), order, options);
     return order;
   });
+  await invalidateProductCards([productId]);
   return placed.id;
 }

@@ -16,6 +16,17 @@ export class ProductsRepository {
     if (!validId(id)) return null;
     return (await this.db.query('SELECT * FROM products WHERE id=$1', [id])).rows[0] ?? null;
   }
+  async card(id: string) {
+    if (!validId(id)) return null;
+    return (await this.db.query(`SELECT p.id,p.name,p.price_cents,p.stock,u.display_name AS seller_name,
+      COALESCE(s.units_sold,0)::text AS units_sold,COALESCE(s.orders_count,0)::text AS orders_count
+      FROM products p JOIN users u ON u.id=p.seller_id
+      LEFT JOIN LATERAL (
+        SELECT sum(i.quantity) AS units_sold,count(*) AS orders_count
+        FROM order_items i JOIN orders o ON o.id=i.order_id
+        WHERE i.product_id=p.id AND o.status IN ('paid','shipped')
+      ) s ON true WHERE p.id=$1`, [id])).rows[0] ?? null;
+  }
   async list(after: string, limit: number) {
     return (await this.db.query('SELECT * FROM products WHERE id > $1 ORDER BY id LIMIT $2', [after, limit])).rows;
   }

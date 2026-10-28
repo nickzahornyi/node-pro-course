@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+const redisUrl = z.preprocess(value => value === '' ? undefined : value, z.string().superRefine((value, ctx) => {
+  try {
+    const url = new URL(value);
+    if (!['redis:', 'rediss:'].includes(url.protocol) || !url.hostname || !/^\/(\d+)?$/.test(url.pathname || '/')) throw new Error();
+  } catch { ctx.addIssue({ code: 'custom', message: 'must be a valid redis:// or rediss:// URL' }); }
+}).optional());
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -45,6 +52,8 @@ export const envSchema = z.object({
     } catch { ctx.addIssue({ code: 'custom', message: 'must be a valid amqp:// or amqps:// broker URL' }); }
   }).optional()),
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
+  REDIS_URL: redisUrl,
+  REDIS_QUEUE_URL: redisUrl,
   NPLUS1_SIZES: z.string().default('5,10').superRefine((value, ctx) => {
     const sizes = value.split(',').map((part) => Number(part.trim()));
     if (sizes.length < 2 || sizes.some((n) => !Number.isSafeInteger(n) || n < 1 || n > 10000)
