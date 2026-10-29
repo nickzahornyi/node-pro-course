@@ -29,7 +29,7 @@ export function configureApp(app: INestApplication, shutdownHooks = true): void 
   // Signed bearer identity and ownership are enforced by OrderAccessService;
   // OpenAPI still validates request bodies, headers and response schemas.
   app.use(OpenApiValidator.middleware({ apiSpec: fileURLToPath(new URL('../openapi/openapi.yaml', import.meta.url)),
-    validateRequests: true, validateResponses: true, validateSecurity: false, ignorePaths: /^\/(auth(?:\/|$)|health(?:\?|$)|db-health(?:\?|$))/ }));
+    validateRequests: true, validateResponses: true, validateSecurity: false, ignorePaths: /^\/(uploads(?:\/|$)|auth(?:\/|$)|health(?:\?|$)|db-health(?:\?|$))/ }));
   app.useGlobalFilters(new ProblemFilter());
   if (shutdownHooks) app.enableShutdownHooks();
 }

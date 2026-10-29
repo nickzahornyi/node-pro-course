@@ -900,6 +900,44 @@ cd marketplace
 export SKIP_VAULT=1
 export DB_URL=postgresql://marketplace@127.0.0.1:6432/marketplace
 export DB_PASSWORD=marketplace-local-password
+export STORAGE_ENDPOINT=http://127.0.0.1:22650
+export STORAGE_ACCESS_KEY=hw26user
+export STORAGE_SECRET_KEY=hw26secretpass
+export STORAGE_BUCKET=hw26-files
+export STORAGE_REGION=us-east-1
+# Тимчасові JWT-ключі лише для локального грейдингу, без файлів із секретами.
+eval "$(node --input-type=module <<'JS'
+import {generateKeyPairSync,randomBytes} from 'node:crypto';
+const k=generateKeyPairSync('ec',{namedCurve:'P-256'});
+console.log('export JWT_KID=hw26-grader');
+console.log('export JWT_PRIVATE_KEY='+Buffer.from(k.privateKey.export({type:'pkcs8',format:'pem'})).toString('base64'));
+console.log('export JWT_PUBLIC_KEY='+Buffer.from(k.publicKey.export({type:'spki',format:'pem'})).toString('base64'));
+console.log('export REFRESH_TOKEN_PEPPER='+randomBytes(32).toString('base64'));
+JS
+)"
+npm ci
+docker compose up -d --wait storage pgbouncer
+npx tsc --noEmit
+npm run demo:upload
+npm run demo:multipart
+npm run demo:multipart
+npm run demo:cdn
+```
+
+Це мінімальний стек для HW-26: SeaweedFS S3 та PostgreSQL. `docker compose up -d --wait`
+піднімає також повний попередній стек; JWT змінні потрібно експортувати до запуску.
+`--wait` обов'язковий. Демо самі застосовують міграції, створюють приватний бакет,
+запускають справжній API на вільному порту й прибирають свої процеси та записи.
+Потрібні Node.js 22+, Docker Desktop, порти 5432, 6432, 22650.
+На наявному volume після ротації задайте поточний DB_PASSWORD.
+
+### Попередні перевірки HW-24
+
+```bash
+cd marketplace
+export SKIP_VAULT=1
+export DB_URL=postgresql://marketplace@127.0.0.1:6432/marketplace
+export DB_PASSWORD=marketplace-local-password
 # Одноразова ES256 пара; жодного готового приватного ключа в README.
 node --input-type=module <<'JS'
 import {generateKeyPairSync,randomBytes} from 'node:crypto';
@@ -1375,3 +1413,141 @@ q1 вибирає замовлення за березень 2026; q3 шукає
 Фактичні плани й час виконання: [OPTIMIZATIONS](db/OPTIMIZATIONS.md).
 Схема й seed застосовуються один раз до порожньої БД; seed закінчується `VACUUM (ANALYZE)`.
 Історичний `src/app.ts` із in-memory даними використовується тільки в unit-тестах; поточний Nest HTTP API (HW-16/18) працює з PostgreSQL, а `/db-health` перевіряє з'єднання з БД.
+
+## Files
+
+HW-26 використовує приватний S3-бакет у SeaweedFS та локальний edge з SDK-доступом
+до origin. AWS-акаунт не потрібен. SeaweedFS запускається з обома access credentials,
+тому анонімний доступ заборонений ([офіційний Docker quick start](https://github.com/seaweedfs/seaweedfs#docker)).
+Дані сховища — tmpfs 1 GiB; healthcheck чекає саме 403 від S3 endpoint.
+Публічних ACL чи bucket policy немає. SeaweedFS обрано як доступний S3-сумісний
+сервер: демо перевіряють справжню валідацію підпису, TTL і приватність бакета.
+
+| Змінна | Призначення / типове локальне значення | Джерело |
+| --- | --- | --- |
+| STORAGE_ENDPOINT | `http://127.0.0.1:22650`; порожнє для AWS | Infisical dev/prod; export у Grading |
+| STORAGE_PUBLIC_ENDPOINT | Необов'язковий endpoint для підпису; compose API використовує адресу, доступну браузеру | Infisical / compose |
+| STORAGE_ACCESS_KEY | S3 access key; локально `hw26user` | Infisical dev/prod; export у Grading |
+| STORAGE_SECRET_KEY | S3 secret key; локально `hw26secretpass` | Infisical dev/prod; export у Grading |
+| STORAGE_BUCKET | `hw26-files` | Infisical dev/prod; export у Grading |
+| STORAGE_REGION | `us-east-1` | Infisical / export; default у коді |
+| STORAGE_PRESIGN_SECONDS | 120 секунд; дозволено 1–900 | Infisical; default у коді |
+| EDGE_PORT | 22651 | Оточення; default у коді |
+| DB_URL, DB_PASSWORD | Наявний PostgreSQL | Infisical; export у Grading |
+| JWT_KID, JWT_PRIVATE_KEY, JWT_PUBLIC_KEY, REFRESH_TOKEN_PEPPER | Наявна авторизація HW-24 | Infisical; тимчасова генерація у Grading |
+| SKIP_VAULT | 1 лише для грейдингу/CI | Оточення runner |
+
+Нових env-файлів немає. Усі три `demo:*` явно проходять через
+`bash scripts/with-secrets.sh dev …`. У звичайній роботі додайте STORAGE змінні
+до того самого Infisical-проєкту HW-11. CDN signing key не потрібен: публічний
+edge не видає CloudFront signed URL. Для приватного контенту майбутній
+`GET /files/:id` має перевіряти гард і видавати короткий redirect або signed cookie;
+ключ підпису тоді теж надходитиме з Infisical.
+
+Контракт API (Bearer з `/auth/login`):
+
+- `POST /uploads/intent`, заголовок `Idempotency-Key`, тіло
+  `{"contentType":"image/png","size":123,"filename":"ignored.png"}`.
+  Сервер повертає `id`, `key`, `url` або multipart `uploadId`, `partSize`, `parts`.
+  filename ігнорується; розширення береться тільки з allowlist. Повтор того самого
+  ключа повертає той самий запис, інше тіло — 422; паралельні наміри серіалізує
+  PostgreSQL advisory lock. Статус у таблиці files — PENDING.
+- Клієнт робить PUT напряму за URL; для single PUT передає оголошений розмір.
+- `POST /uploads/resume`, тіло `{"id":"uuid"}`: пагінований ListParts,
+  `existing` та свіжі URL лише на відсутні частини. Чужий id — 404.
+- `POST /uploads/commit`, те саме тіло: multipart звіряє послідовність і розміри
+  частин та виконує Complete; HeadObject звіряє розмір і Content-Type.
+  Немає байтів чи частин — 409; тільки успіх переводить статус у COMPLETED.
+
+120 секунд достатньо для аватарки з форми й обмежує час використання втраченого
+URL. Відкликати presigned окремо не можна; STS credentials можуть скоротити строк.
+Для демонстрації реального протермінування demo:upload запускає свій API з TTL
+3 секунди й повторює PUT тим самим URL після очікування; звичайний default — 120.
+URL не пишуться в логи. Content-Type є заявою клієнта: magic-byte перевірка та
+сканування залишаються наступним етапом. Presigned PUT може перезаписувати той
+самий ключ до закінчення TTL; для суворої незмінності потрібне versioning із
+фіксацією VersionId або копіювання перевіреної версії в окремий фінальний ключ.
+
+Поріг multipart = `3 × 5 MiB = 15 MiB`: від трьох частин відновлення вже економить
+щонайменше два повторні PUT. Розмір частини =
+`max(5 MiB, ceil(size / 10000 / MiB) × MiB)`: не більше 10 000 частин, усі крім
+останньої не менші за 5 MiB. Приймаємо максимум 5 TiB. Демо бере 15 MiB,
+завершує перший процес кодом 17 після двох PUT, запускає новий процес без
+S3 credentials, який сам викликає resume й доливає одну частину. ETag із `-3`
+перевіряється як multipart-ознака, а не MD5 цілого файла.
+
+`npm run build && npm run start:edge` запускає локальний CDN. Він читає тільки
+`assets/` своїми S3 credentials, кешує відповіді з origin `public,max-age`, передає
+origin Cache-Control і ставить X-Cache: MISS/HIT. Кеш у пам'яті обмежено 128
+об'єктами; для великих production assets потрібен дисковий/керований CDN кеш.
+`publishAsset` завантажує `assets/app.<sha256>.css` та ставить на об'єкті
+`public, max-age=31536000, immutable`. Нове тіло — новий URL, інвалідацій нуль;
+старе ім'я залишається HIT зі старими байтами. Звичайні uploads через edge
+не відкриваються. Демо створюють власний edge з порожнім кешем і унікальні keys,
+видаляють об'єкти та abort-ять незавершені multipart у finally; жодних спільних
+даних чи чужих upload-сесій не очищають.
+
+AWS-форма: S3 Block Public Access увімкнено, CloudFront OAC підписує origin
+requests (`SigningBehavior: always`, `SigningProtocol: sigv4`). Приклад bucket
+policy; замініть account, distribution і bucket на свої:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "AllowOnlyOurCloudFrontOAC",
+    "Effect": "Allow",
+    "Principal": {"Service": "cloudfront.amazonaws.com"},
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::YOUR-BUCKET/assets/*",
+    "Condition": {"StringEquals": {
+      "AWS:SourceArn": "arn:aws:cloudfront::123456789012:distribution/YOUR-DISTRIBUTION"
+    }}
+  }]
+}
+```
+
+Доступ на завантаження та Head/List/Complete надається окремій IAM ролі API;
+edge у production потребує лише GetObject на assets. Локально використано dev
+credentials емулятора. Lifecycle `AbortIncompleteMultipartUpload: 7 days`
+прибирає оплачені незавершені частини. Для PENDING старших за добу планується
+BullMQ cleanup: AbortMultipartUpload → DeleteObject → видалення рядка; такої
+production job у цьому ДЗ немає. Дампи HW-15 можна спрямувати в окремий backup
+prefix з retention policy; Glacier змінює RTO, restore-drill залишається потрібним.
+
+### Числа демо
+
+Фактичний прогін 2026-10-29, SeaweedFS із digest у compose, чистий окремий
+compose-проєкт `marketplace-hw26-check` (порти 25432/26432/22652), усі exit 0.
+Multipart запущено двічі поспіль без ручного очищення, результати однакові.
+
+```text
+# demo:upload
+intent=200
+key-from-server=1
+api-alive=0
+put-offline=200
+commit=200
+commit-without-bytes=409
+tampered=403
+expired=403
+
+# demo:multipart — обидва прогони
+head-before-complete=404
+resumed-parts=1
+complete=200
+size-match=1
+etag-multipart=1
+
+# demo:cdn
+direct=403
+edge-miss=200
+edge-hit=200
+cache-hit=1
+new-name=1
+new-url=200
+content-changed=1
+```
+
+Додатково: `npx tsc --noEmit`, 46/46 наявних тестів (`npm test`), статична
+перевірка обгорток та скан вмісту на приватні ключі/живі env URL — успішні.

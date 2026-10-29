@@ -1,3 +1,5 @@
+import { FilesController } from './files/http.js';
+import { FilesService } from './files/service.js';
 import { AuthService } from './auth/auth.service.js';
 import { AuthController, AuthGuard, ProductWriteGuard } from './auth/http.js';
 import { Module } from '@nestjs/common';
@@ -18,8 +20,8 @@ import { CachedProductsService } from './redis/products.service.js';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true, validate, ignoreEnvFile: process.env.NODE_ENV === 'test' })],
-  controllers: [AuthController, MarketplaceController, OrderRealtimeController],
-  providers: [AuthService, AuthGuard, ProductWriteGuard, DatabaseService, ProductsRepository, OrdersRepository, OrderAccessService, OrderEventsService, OrderStatusService, OrdersGateway, OrderCreationService, RedisService, CachedProductsService],
+  controllers: [FilesController, AuthController, MarketplaceController, OrderRealtimeController],
+  providers: [FilesService, AuthService, AuthGuard, ProductWriteGuard, DatabaseService, ProductsRepository, OrdersRepository, OrderAccessService, OrderEventsService, OrderStatusService, OrdersGateway, OrderCreationService, RedisService, CachedProductsService],
   exports: [DatabaseService],
 })
 export class AppModule {}

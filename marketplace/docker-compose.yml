@@ -1,4 +1,20 @@
 services:
+  storage:
+    image: chrislusf/seaweedfs@sha256:c2658820e763294a9e9de7b36c81e59b879e3459148351aee4e31a126ca64860
+    environment:
+      AWS_ACCESS_KEY_ID: hw26user
+      AWS_SECRET_ACCESS_KEY: hw26secretpass
+      S3_BUCKET: hw26-files
+    ports:
+      - "127.0.0.1:${STORAGE_PUBLISHED_PORT:-22650}:8333"
+    tmpfs:
+      - /data:size=1g
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://127.0.0.1:8333/ 2>&1 | grep -q '403 Forbidden'"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
   redis-cache:
     image: redis:8.2-alpine
     command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
@@ -261,6 +277,12 @@ services:
     environment:
       NODE_ENV: development
       PORT: 3000
+      STORAGE_ENDPOINT: http://storage:8333
+      STORAGE_PUBLIC_ENDPOINT: http://127.0.0.1:${STORAGE_PUBLISHED_PORT:-22650}
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-hw26user}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-hw26secretpass}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-hw26-files}
+      STORAGE_REGION: ${STORAGE_REGION:-us-east-1}
       JWT_KID: ${JWT_KID}
       JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
