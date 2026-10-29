@@ -20,6 +20,12 @@ export class User {
   @Column({ name: 'balance_cents', type: 'bigint', default: 0 })
   balanceCents!: string;
 
+  @Column({ name: 'password_hash', type: 'text', nullable: true })
+  passwordHash!: string | null;
+
+  @Column({ type: 'text', default: 'buyer' })
+  role!: 'buyer' | 'seller' | 'admin';
+
   @Column({ name: 'created_at', type: 'timestamptz', default: () => 'now()' })
   createdAt!: Date;
 

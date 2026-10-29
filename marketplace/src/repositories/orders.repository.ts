@@ -28,12 +28,12 @@ export class OrdersRepository {
     return { id: rows[0].id as string, status: rows[0].status === 'pending' ? 'created' : rows[0].status, total_cents: Number(rows[0].total_cents),
       items: rows.map(row => ({ product_id: row.product_id as string, quantity: row.quantity as number, unit_price_cents: Number(row.unit_price_cents) })) };
   }
-  async list(after: string, limit: number) {
+  async list(after: string, limit: number, userId?: string) {
     const { rows } = await this.db.query(`SELECT o.id,o.status,o.total_cents,
       json_agg(json_build_object('product_id',i.product_id::text,'quantity',i.quantity,
         'unit_price_cents',i.unit_price_cents) ORDER BY i.id) AS items
-      FROM (SELECT id,status,total_cents FROM orders WHERE id > $1 ORDER BY id LIMIT $2) o
-      JOIN order_items i ON i.order_id=o.id GROUP BY o.id,o.status,o.total_cents ORDER BY o.id`, [after, limit]);
+      FROM (SELECT id,status,total_cents FROM orders WHERE id > $1 AND ($3::bigint IS NULL OR user_id=$3) ORDER BY id LIMIT $2) o
+      JOIN order_items i ON i.order_id=o.id GROUP BY o.id,o.status,o.total_cents ORDER BY o.id`, [after, limit, userId ?? null]);
     return rows.map(row => ({ id: row.id as string, status: row.status === 'pending' ? 'created' : row.status,
       total_cents: Number(row.total_cents), items: row.items }));
   }

@@ -47,7 +47,11 @@
     "demo:session": "bash scripts/with-secrets.sh dev bash scripts/redis-demo.sh session",
     "demo:ratelimit": "bash scripts/with-secrets.sh dev bash scripts/redis-demo.sh ratelimit",
     "demo:queue": "bash scripts/with-secrets.sh dev bash scripts/redis-demo.sh queue",
-    "test:redis": "bash scripts/with-secrets.sh dev node --test integration/redis-http.test.js"
+    "test:redis": "bash scripts/with-secrets.sh dev node --test integration/redis-http.test.js",
+    "start:vault": "bash scripts/with-secrets.sh dev npm run start",
+    "demo:auth": "bash scripts/with-secrets.sh dev bash scripts/auth-demo.sh auth",
+    "demo:reuse": "bash scripts/with-secrets.sh dev bash scripts/auth-demo.sh reuse",
+    "demo:rbac": "bash scripts/with-secrets.sh dev bash scripts/auth-demo.sh rbac"
   },
   "dependencies": {
     "@nestjs/common": "11.1.6",
@@ -61,6 +65,7 @@
     "express": "4.22.2",
     "express-openapi-validator": "5.6.2",
     "ioredis": "^5.11.1",
+    "jose": "^6.2.9",
     "js-yaml": "4.1.0",
     "pg": "8.16.3",
     "reflect-metadata": "0.2.2",

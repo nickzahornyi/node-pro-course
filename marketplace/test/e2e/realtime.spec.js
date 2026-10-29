@@ -3,12 +3,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { io } from 'socket.io-client';
 import request from 'supertest';
-import { startDatabase, startApplication, truncate } from '../integration/testkit.js';
+import { startDatabase, startApplication, truncate, accessFor } from '../integration/testkit.js';
 import { aProduct, insertUser } from '../integration/builders.js';
 import { ProductsRepository } from '../../dist/repositories/products.repository.js';
 import { OrdersRepository } from '../../dist/repositories/orders.repository.js';
 import { OrderEventsService } from '../../dist/realtime/order-events.service.js';
-import { issueToken } from '../../dist/realtime/token.js';
 
 let database, app, base, ownerA, ownerB, orderA, orderB, tokenA, tokenB;
 const sockets = new Set(), streams = new Set();
@@ -21,7 +20,7 @@ beforeEach(async () => {
   const repo = new OrdersRepository(database.pool);
   orderA = await repo.create(ownerA.id, [{ product_id: product.id, quantity: 1 }]);
   orderB = await repo.create(ownerB.id, [{ product_id: product.id, quantity: 1 }]);
-  tokenA = issueToken(ownerA.id, database.env.AUTH_SECRET); tokenB = issueToken(ownerB.id, database.env.AUTH_SECRET);
+  tokenA = await accessFor(database, app, ownerA.id); tokenB = await accessFor(database, app, ownerB.id);
 });
 afterEach(async () => {
   sockets.forEach(socket => socket.disconnect()); sockets.clear();
@@ -80,7 +79,7 @@ it('headless demo measures different rooms and the same-room positive control', 
 
 it('rejects anonymous, forged and foreign identities for WS, SSE and status changes', async () => {
   await expect(connect(undefined)).rejects.toThrow('Unauthorized');
-  await expect(connect(issueToken(ownerA.id, 'another-signing-key-at-least-32-characters'))).rejects.toThrow('Unauthorized');
+  await expect(connect(tokenA.slice(0,-8)+'tampered')).rejects.toThrow('Unauthorized');
   const foreign = await connect(tokenB);
   const ack = await foreign.timeout(5000).emitWithAck('join', { order_id: orderA.id });
   expect(ack).toMatchObject({ ok: false, status: 403 });
@@ -101,7 +100,7 @@ it('SSE and WebSocket carry the same committed event, and GET reflects the statu
   expect(frame.event).toBe('order.status'); expect(frame.id).toBe(changed.body.event_id);
   expect(frame.data).toEqual(event); expect(event).toMatchObject({ order_id: orderA.id, previous_status: 'pending', status: 'paid' });
   expect((await database.pool.query('SELECT status FROM orders WHERE id=$1', [orderA.id])).rows[0].status).toBe(event.status);
-  const read = await request(app.getHttpServer()).get(`/orders/${orderA.id}`).expect(200);
+  const read = await request(app.getHttpServer()).get(`/orders/${orderA.id}`).set('Authorization', `Bearer ${tokenA}`).expect(200);
   expect(read.body.status).toBe('paid');
 });
 
@@ -159,10 +158,10 @@ it('concurrent status changes retain commit order and monotonic event IDs', asyn
 it('later status changes preserve the original idempotent POST response', async () => {
   const product = await new ProductsRepository(database.pool).create(aProduct(ownerA.id));
   const body = { items: [{ product_id: product.id, quantity: 1 }] };
-  const created = await request(app.getHttpServer()).post('/orders').set('Idempotency-Key', 'status-replay').send(body).expect(201);
+  const created = await request(app.getHttpServer()).post('/orders').set('Authorization', `Bearer ${tokenA}`).set('Idempotency-Key', 'status-replay').send(body).expect(201);
   const { rows: [guest] } = await database.pool.query('SELECT user_id FROM orders WHERE id=$1', [created.body.id]);
-  await patch(created.body, issueToken(guest.user_id, database.env.AUTH_SECRET), 'paid').expect(200);
-  const replay = await request(app.getHttpServer()).post('/orders').set('Idempotency-Key', 'status-replay').send(body).expect(201);
+  await patch(created.body, await accessFor(database, app, guest.user_id), 'paid').expect(200);
+  const replay = await request(app.getHttpServer()).post('/orders').set('Authorization', `Bearer ${tokenA}`).set('Idempotency-Key', 'status-replay').send(body).expect(201);
   expect(replay.headers['idempotency-replay']).toBe('true'); expect(replay.body).toEqual(created.body);
-  expect((await request(app.getHttpServer()).get(`/orders/${created.body.id}`).expect(200)).body.status).toBe('paid');
+  expect((await request(app.getHttpServer()).get(`/orders/${created.body.id}`).set('Authorization', `Bearer ${tokenA}`).expect(200)).body.status).toBe('paid');
 });

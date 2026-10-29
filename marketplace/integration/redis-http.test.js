@@ -7,19 +7,25 @@ import { checkout } from '../dist/checkout.js';
 import { connectRedis, requiredUrl } from '../dist/redis/connection.js';
 import { AsideCache } from '../dist/redis/cache.js';
 import { OrderStatusService } from '../dist/realtime/order-status.service.js';
+import { passwordHash } from '../dist/auth/auth.service.js';
 import { OrderEventsService } from '../dist/realtime/order-events.service.js';
 
 const api = process.env.ASYNC_API_URL ?? 'http://127.0.0.1:3000';
 const cache = connectRedis(requiredUrl('REDIS_URL'));
 const state = connectRedis(requiredUrl('REDIS_QUEUE_URL'));
 const scope = `hw23-http-${randomUUID()}`;
-let fixture, cookie, session;
+let fixture, cookie, session, access;
 const draftIds = [];
 const get = path => fetch(`${api}${path}`, { headers: { cookie } });
 
 before(async () => {
   await Promise.all([cache.connect(), state.connect(), ds.initialize()]);
   fixture = await createFixture(ds, 10);
+  const password = randomUUID();
+  const [user] = await ds.query('UPDATE users SET password_hash=$1 WHERE id=$2 RETURNING email',[passwordHash(password),fixture.buyerId]);
+  const login = await fetch(`${api}/auth/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:user.email,password})});
+  assert.equal(login.status,200);
+  access = (await login.json()).access_token;
   await checkout(ds, fixture.buyerId, fixture.productId, 2, { scope });
   const response = await fetch(`${api}/session`);
   assert.equal(response.status, 200);
@@ -127,7 +133,7 @@ test('POST /orders invalidates its product cards after commit and preserves the 
   assert.equal(await cache.exists(key), 1);
   const intent = `hw23-http-${randomUUID()}`;
   const post = () => fetch(`${api}/orders`, {
-    method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': intent, cookie },
+    method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': intent, cookie, authorization: `Bearer ${access}` },
     body: JSON.stringify({ items: [{ product_id: fixture.productId, quantity: 1 }] }),
   });
   const created = await post();

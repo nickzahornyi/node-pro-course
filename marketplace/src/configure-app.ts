@@ -16,7 +16,7 @@ class ProblemFilter implements ExceptionFilter {
       title, status, detail: status >= 500 ? title : error.message, instance: context.getRequest().originalUrl });
   }
 }
-export function configureApp(app: INestApplication): void {
+export function configureApp(app: INestApplication, shutdownHooks = true): void {
   app.use(express.json());
   const redis = app.get(RedisService);
   if (redis.limiter) app.use(['/products', '/session', '/orders'], rateLimitMiddleware(redis.limiter));
@@ -29,7 +29,7 @@ export function configureApp(app: INestApplication): void {
   // Signed bearer identity and ownership are enforced by OrderAccessService;
   // OpenAPI still validates request bodies, headers and response schemas.
   app.use(OpenApiValidator.middleware({ apiSpec: fileURLToPath(new URL('../openapi/openapi.yaml', import.meta.url)),
-    validateRequests: true, validateResponses: true, validateSecurity: false, ignorePaths: /^\/(health|db-health)(\?|$)/ }));
+    validateRequests: true, validateResponses: true, validateSecurity: false, ignorePaths: /^\/(auth(?:\/|$)|health(?:\?|$)|db-health(?:\?|$))/ }));
   app.useGlobalFilters(new ProblemFilter());
-  app.enableShutdownHooks();
+  if (shutdownHooks) app.enableShutdownHooks();
 }

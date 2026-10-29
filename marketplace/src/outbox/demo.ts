@@ -1,3 +1,4 @@
+import { AuthService, passwordHash } from '../auth/auth.service.js';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -54,16 +55,19 @@ try {
   const creation = app.get(OrderCreationService);
   const create = creation.create.bind(creation);
   let failedWrite = 0;
-  creation.create = (idempotencyKey, body) => create(idempotencyKey, body, { scope,
+  creation.create = (idempotencyKey, body, _options, userId) => create(idempotencyKey, body, { scope,
     afterOutbox: mode === 'crash-write' ? async (query, event) => {
       failedWrite++;
       // Actual business SQL failure (CHECK), on the SAME transaction connection.
       await query("UPDATE orders SET status='invalid-hw22-status' WHERE id=$1", [event.data.orderId]);
-    } : undefined });
+    } : undefined }, userId);
   configureApp(app);
   await app.listen(0, '127.0.0.1');
+  const password = randomBytes(24).toString('hex');
+  const [identity] = await dataSource.query('UPDATE users SET password_hash=$1 WHERE id=(SELECT seller_id FROM products WHERE id=$2) RETURNING email',[passwordHash(password),product.id]);
+  const token = (await app.get(AuthService).login(identity.email,password)).access_token;
   const endpoint = `${await app.getUrl()}/orders`;
-  const post = () => fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'Idempotency-Key': key },
+  const post = () => fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'Idempotency-Key': key, authorization: `Bearer ${token}` },
     body: JSON.stringify({ items: [{ product_id: product.id, quantity: 1 }] }) });
   const first = await post();
   if (mode === 'crash-write') {

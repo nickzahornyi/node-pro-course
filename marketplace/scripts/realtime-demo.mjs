@@ -30,7 +30,7 @@ try {
   const authA = token(process.env.REALTIME_TOKEN_A, process.env.REALTIME_USER_A || '1');
   const authB = sameRoom ? authA : token(process.env.REALTIME_TOKEN_B, process.env.REALTIME_USER_B || '2');
   await Promise.all([connect(authA, orderA, 0), connect(authB, roomB, 1)]);
-  const existing = await fetch(`${base}/orders/${encodeURIComponent(orderA)}`, { signal: AbortSignal.timeout(5000) });
+  const existing = await fetch(`${base}/orders/${encodeURIComponent(orderA)}`, { headers: {authorization: `Bearer ${authA}`}, signal: AbortSignal.timeout(5000) });
   if (!existing.ok) throw new Error(`Read order: HTTP ${existing.status}`);
   const { status } = await existing.json();
   const changed = await fetch(`${base}/orders/${encodeURIComponent(orderA)}/status`, {

@@ -59,6 +59,35 @@ paths:
         default:
           $ref: '#/components/responses/UnexpectedError'
   /products:
+    post:
+      operationId: createProduct
+      summary: Create product as seller or admin
+      security:
+        - RealtimeBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, price_cents]
+              properties:
+                name: { type: string, minLength: 1 }
+                price_cents: { type: integer, minimum: 0, maximum: 999999999999 }
+      responses:
+        '201':
+          description: Product created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
     get:
       operationId: listProducts
       summary: List products

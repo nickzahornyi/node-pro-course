@@ -261,6 +261,11 @@ services:
     environment:
       NODE_ENV: development
       PORT: 3000
+      JWT_KID: ${JWT_KID}
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      REFRESH_TOKEN_PEPPER: ${REFRESH_TOKEN_PEPPER}
+      JWT_PREVIOUS_PUBLIC_KEYS: ${JWT_PREVIOUS_PUBLIC_KEYS:-}
       DB_URL: postgresql://marketplace@pgbouncer:6432/marketplace
       DB_PASSWORD_FILE: /run/secrets/db_password
       DB_POOL_MAX: 10

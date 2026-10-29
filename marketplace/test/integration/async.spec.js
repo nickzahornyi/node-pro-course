@@ -84,7 +84,11 @@ it('really reverts and reapplies outbox/inbox migration without deleting busines
   await checkout(ds, buyer.id, product.id);
   const cli = action => promisify(execFile)(process.execPath,
     ['node_modules/typeorm/cli.js', action, '-d', 'dist/data-source.js'], { env: database.env });
-  await cli('migration:revert');
+  // Revert newer migrations too: auth now follows the outbox migration.
+  for (let count = 0; count < 10; count++) {
+    if (!(await database.pool.query("SELECT to_regclass('public.outbox') AS name")).rows[0].name) break;
+    await cli('migration:revert');
+  }
   expect((await database.pool.query("SELECT to_regclass('public.outbox') AS name")).rows[0].name).toBeNull();
   expect((await database.pool.query("SELECT to_regclass('public.processed_messages') AS name")).rows[0].name).toBeNull();
   await cli('migration:run');

@@ -2,13 +2,41 @@ name: Marketplace tests and contracts
 on:
   pull_request:
   push:
-    branches: [main, hw-16, hw-18, hw-19, hw-22, hw-23]
+    branches: [main, hw-16, hw-18, hw-19, hw-22, hw-23, hw-24]
 permissions:
   contents: read
 defaults:
   run:
     working-directory: marketplace
 jobs:
+  auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COMPOSE_PROJECT_NAME: marketplace-auth-ci
+      SKIP_VAULT: '1'
+      DB_URL: postgresql://marketplace@127.0.0.1:6432/marketplace
+      DB_PASSWORD: marketplace-local-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: marketplace/package-lock.json
+      - run: npm ci
+      - run: node scripts/ci-auth.mjs
+      - run: npx tsc --noEmit
+      - run: docker compose up -d --wait pgbouncer
+      - name: Auth acceptance twice
+        run: |
+          for round in 1 2; do
+            npm run demo:auth
+            npm run demo:reuse
+            npm run demo:rbac
+          done
+      - if: always()
+        run: docker compose down --volumes
   redis:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -28,6 +56,7 @@ jobs:
           cache-dependency-path: marketplace/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
+      - run: node scripts/ci-auth.mjs
       - run: docker compose up -d --wait app outbox-relay redis-worker
       - run: npm run build && npm run migrate
       - name: Redis acceptance twice without manual cleanup
@@ -77,6 +106,7 @@ jobs:
           cache: npm
           cache-dependency-path: marketplace/package-lock.json
       - run: npm ci
+      - run: node scripts/ci-auth.mjs
       - run: docker compose up -d --wait app order-consumer outbox-relay redis-worker
       - name: Run all async demos twice without manual cleanup
         run: |

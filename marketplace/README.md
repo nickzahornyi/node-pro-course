@@ -1,6 +1,6 @@
 # Marketplace API contract
 
-Для поточного ДЗ **HW-23** починайте з [Redis: кеш, сесії, ліміти, черга](#redis-кеш-сесії-ліміти-черга) та [Grading](#grading).
+Для поточного ДЗ **HW-24** починайте з [Auth](#auth) та [Grading](#grading).
 Усі npm/Compose-команди виконуються в `marketplace/` після клонування репозиторію.
 Розділ HW-12 нижче збережено як окремий SQL-стенд попереднього завдання.
 
@@ -809,7 +809,117 @@ Runtime-образ містить production-залежності, `dist`, OpenA
 відповідати ролі БД. `docker compose down -v` видаляє обидва volumes і всі дані;
 на наступному старті credentials автоматично повертаються до dev-прикладу.
 
+## Auth
+
+HW-24: `POST /auth/login` приймає `{email,password}`, повертає `access_token`,
+`refresh_token`, `token_type`, `expires_in`; refresh приймає `{refresh_token}`.
+`POST /auth/logout` потребує Bearer access і повертає 204. Паролі зберігаються як
+scrypt із випадковою сіллю; користувачі без password_hash не можуть увійти.
+Публічної реєстрації та фіксованого адміністративного пароля немає; демо самі
+створюють тимчасових користувачів із випадковими паролями.
+
+| Змінна | Джерело | Формат / призначення |
+|---|---|---|
+| `JWT_PRIVATE_KEY` | сховище Infisical (#11), окремо dev/prod | PKCS8 PEM у base64, ES256 P-256 |
+| `JWT_PUBLIC_KEY` | сховище Infisical (#11), окремо dev/prod | SPKI PEM у base64, відповідний public key |
+| `JWT_KID` | сховище Infisical (#11) | непорожній ідентифікатор поточного ключа |
+| `REFRESH_TOKEN_PEPPER` | сховище Infisical (#11) | мінімум 16 символів, рекомендовано 32 випадкові байти |
+| `JWT_PREVIOUS_PUBLIC_KEYS` | оточення, необов'язково | JSON object kid → base64 SPKI для overlap |
+| `DB_URL` | compose / оточення | PostgreSQL URL без пароля |
+| `DB_PASSWORD` | compose / оточення | пароль локального стенда або runtime credential |
+
+ES256 обрано через асиметричний розподіл довіри: верифікатор із public key не
+може виписати собі адміністратора, а P-256 дає компактні підписи. `jose.jwtVerify`
+перевіряє підпис, exp, issuer, audience, typ та явний `algorithms: ['ES256']`.
+Access живе 10 хвилин. Refresh — 48 випадкових байтів, 30 днів, у БД лише
+HMAC-SHA256(token, pepper). Конфігурація ключів перевіряється до AppModule/БД,
+без env-файлів і дефолтних ключів. `start` — голий, `start:vault` та всі три демо
+йдуть через наявну `with-secrets.sh dev`; `SKIP_VAULT=1` зберігається.
+
+Ротація бере `FOR UPDATE` на сім'ї, позначає старий refresh використаним і видає
+нову пару в одному COMMIT. Повтор використаного refresh відкликає всю сім'ю;
+401 піднімається **після** COMMIT, щоб не відкотити відкликання. Лог містить
+тільки family_id. Клієнт має серіалізувати refresh одним спільним promise;
+grace window немає. Два одночасні refresh трактуються як reuse: обидві сторони
+втрачають сесію (це додатково перевіряє demo:reuse).
+
+Логаут — дві дії: revoked_at у сім'ї refresh і jti access у денилисті. Обидві
+виконуються однією PostgreSQL-транзакцією, без dual write у Redis. Денилист
+має expires_at рівно exp JWT; прострочені записи логічно не діють, фізично
+видаляються кожні 30 секунд та при logout. Додаткова перевірка стану сім'ї
+негайно блокує також попередні access цієї сім'ї після logout або reuse.
+
+Рівень ролі — AuthGuard та ProductWriteGuard: POST /products лише seller/admin.
+Рівень власності — GET /orders/:id завантажує ресурс і перевіряє owner у
+контролері; список фільтрується в SQL. Гард не завантажує замовлення.
+POST /orders бере userId із перевіреної identity, а idempotency key має простір
+імен користувача; підмінити власника через body неможливо. SSE/status/WebSocket
+також приймають новий access JWT. Для відкритого realtime-з'єднання exp обмежує
+час життя; logout перевіряється при новому HTTP-запиті/підключенні.
+Роль у JWT — кеш: розжалуваний адмін зберігає права до exp access (до 10 хвилин),
+якщо сім'ю не відкликано; refresh читає актуальну роль із БД.
+
+Overlap-ротація: спочатку роздати новий public key усім верифікаторам, залишивши
+старий; потім перемкнути JWT_KID/private/public на нову пару, а старий public
+зберігати в JWT_PREVIOUS_PUBLIC_KEYS щонайменше 10 хвилин після останнього
+підпису старим ключем. kid вибирає лише ключ із налаштованої мапи, не URL/файл.
+Pepper не змінюють під час overlap без окремого плану міграції: його зміна
+робить усі наявні refresh непридатними.
+
+Відбитки двох окремо згенерованих локальних кандидатів для dev/prod
+(SHA256 від SPKI DER; приватні ключі в репозиторій не потрапляють):
+
+- dev: `eedfcff235c86f4a8f37eee3de9b720f0c2711f709f3d28381aef2a3100b9ee6`
+- prod: `8197f88a8cd119697130fb74c982217f8dffb29d016d3066daffa70b1f101cf5`
+
+Це доказ різних згенерованих пар, **не** підтвердження налаштованих оточень:
+Infisical-проєкт у цьому workspace ще не налаштовано. Завантаження ключів у
+реальні dev/prod і перевірка їхніх відбитків потребують доступу до сховища.
+Грейдер генерує власну пару нижче; ці локальні ключі йому не потрібні.
+
+Демо самі виконують міграції, створюють UUID-ізольовані fixtures, піднімають
+Nest на вільному порту та закривають сервер і видаляють власні дані у finally.
+Обробники SIGINT/SIGTERM також запускають cleanup. Контрактні рядки
+`ключ=число` перевіряються assert; порушення → exit ≠ 0.
+`demo:auth` додатково перевіряє наявність jti і точний exp у денилисті.
+
 ## Grading
+
+```bash
+cd marketplace
+export SKIP_VAULT=1
+export DB_URL=postgresql://marketplace@127.0.0.1:6432/marketplace
+export DB_PASSWORD=marketplace-local-password
+# Одноразова ES256 пара; жодного готового приватного ключа в README.
+node --input-type=module <<'JS'
+import {generateKeyPairSync,randomBytes} from 'node:crypto';
+import {writeFileSync} from 'node:fs';
+const k=generateKeyPairSync('ec',{namedCurve:'P-256'});
+writeFileSync('/tmp/hw24-grader-private.b64',Buffer.from(k.privateKey.export({type:'pkcs8',format:'pem'})).toString('base64'),{mode:0o600});
+writeFileSync('/tmp/hw24-grader-public.b64',Buffer.from(k.publicKey.export({type:'spki',format:'pem'})).toString('base64'));
+writeFileSync('/tmp/hw24-grader-pepper',randomBytes(32).toString('base64'),{mode:0o600});
+JS
+export JWT_KID=grader
+export JWT_PRIVATE_KEY="$(cat /tmp/hw24-grader-private.b64)"
+export JWT_PUBLIC_KEY="$(cat /tmp/hw24-grader-public.b64)"
+export REFRESH_TOKEN_PEPPER="$(cat /tmp/hw24-grader-pepper)"
+npm ci
+docker compose up -d --wait
+npx tsc --noEmit
+npm run demo:auth
+npm run demo:reuse
+npm run demo:rbac
+# Повторний прогін тих самих команд не потребує очищення.
+```
+
+Для auth-демо достатньо `docker compose up -d --wait pgbouncer` замість повного
+стеку. DB credentials вище відповідають свіжому dev volume; після ротації
+використовуйте поточний пароль. Vault-шлях: збережіть чотири JWT/pepper змінні
+з таблиці Auth у наявному Infisical dev/prod, потім `unset SKIP_VAULT` і
+`npm run start:vault`. Перед голим запуском без ключів `npm run start` має
+завершитися самостійно з повідомленням JWT_PRIVATE_KEY та інших відсутніх змінних.
+
+### Попередні перевірки HW-23
 
 `cd marketplace` — перша команда після клону репозиторію; усі команди нижче виконуються в цьому каталозі з `package.json`.
 
