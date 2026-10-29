@@ -1,3 +1,5 @@
+import { AuthService } from './auth/auth.service.js';
+import { AuthController, AuthGuard, ProductWriteGuard } from './auth/http.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { validate } from './config/env.schema.js';
@@ -16,8 +18,8 @@ import { CachedProductsService } from './redis/products.service.js';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true, validate, ignoreEnvFile: process.env.NODE_ENV === 'test' })],
-  controllers: [MarketplaceController, OrderRealtimeController],
-  providers: [DatabaseService, ProductsRepository, OrdersRepository, OrderAccessService, OrderEventsService, OrderStatusService, OrdersGateway, OrderCreationService, RedisService, CachedProductsService],
+  controllers: [AuthController, MarketplaceController, OrderRealtimeController],
+  providers: [AuthService, AuthGuard, ProductWriteGuard, DatabaseService, ProductsRepository, OrdersRepository, OrderAccessService, OrderEventsService, OrderStatusService, OrdersGateway, OrderCreationService, RedisService, CachedProductsService],
   exports: [DatabaseService],
 })
 export class AppModule {}
