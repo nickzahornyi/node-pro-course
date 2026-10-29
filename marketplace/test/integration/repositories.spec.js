@@ -35,6 +35,17 @@ describe('ProductsRepository / PostgreSQL', () => {
   });
 });
 describe('OrdersRepository / PostgreSQL', () => {
+  it('loads ownership with the order in a single query without adding it to the public DTO', async () => {
+    const p = await products.create(aProduct(user.id));
+    const order = await orders.create(user.id, [{product_id:p.id, quantity:1}]);
+    let queries = 0;
+    const repository = new OrdersRepository({query(sql, args) { queries++; return client.query(sql,args); }});
+    const loaded = await repository.findWithOwner(order.id);
+    expect(queries).toBe(1);
+    expect(loaded.userId).toBe(user.id);
+    expect(loaded.order).toEqual(order);
+    expect(loaded.order).not.toHaveProperty('user_id');
+  });
   it('creates an order and reads the full JOIN graph', async () => {
     const p = await products.create(aProduct(user.id));
     const order = await orders.create(user.id, [{ product_id: p.id, quantity: 2 }]);

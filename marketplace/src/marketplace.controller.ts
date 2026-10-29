@@ -55,11 +55,10 @@ export class MarketplaceController {
     return page((await this.orders.list(afterId(cursor), Number(limit) + 1, req.identity.userId)).filter(o => o !== null), Number(limit));
   }
   @Get('orders/:orderId') @UseGuards(AuthGuard) async getOrder(@Req() req: AuthRequest, @Param('orderId') id: string) {
-    const order = await this.orders.find(id);
-    if (!order) throw new NotFoundException('Order not found');
-    const {rows:[owner]} = await this.db.query('SELECT user_id FROM orders WHERE id=$1',[id]);
-    if (owner.user_id !== req.identity.userId) throw new ForbiddenException('Order belongs to another user');
-    return order;
+    const result = await this.orders.findWithOwner(id);
+    if (!result) throw new NotFoundException('Order not found');
+    if (result.userId !== req.identity.userId) throw new ForbiddenException('Order belongs to another user');
+    return result.order;
   }
   @Post('orders') @UseGuards(AuthGuard) async createOrder(@Req() req: AuthRequest, @Headers('idempotency-key') key: string, @Body() body: { items: ItemInput[] }, @Res({ passthrough: true }) response: Response) {
     const result = await this.creation.create(key, body, {}, req.identity.userId);

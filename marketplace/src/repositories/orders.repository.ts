@@ -21,12 +21,15 @@ export class OrdersRepository {
     return this.find(order.id);
   }
   async find(id: string) {
+    return (await this.findWithOwner(id))?.order ?? null;
+  }
+  async findWithOwner(id: string) {
     if (!validId(id)) return null;
-    const { rows } = await this.db.query(`SELECT o.id,o.status,o.total_cents,i.product_id,i.quantity,i.unit_price_cents
+    const { rows } = await this.db.query(`SELECT o.id,o.user_id,o.status,o.total_cents,i.product_id,i.quantity,i.unit_price_cents
       FROM orders o JOIN order_items i ON i.order_id=o.id WHERE o.id=$1 ORDER BY i.id`, [id]);
     if (!rows.length) return null;
-    return { id: rows[0].id as string, status: rows[0].status === 'pending' ? 'created' : rows[0].status, total_cents: Number(rows[0].total_cents),
-      items: rows.map(row => ({ product_id: row.product_id as string, quantity: row.quantity as number, unit_price_cents: Number(row.unit_price_cents) })) };
+    return { userId: rows[0].user_id as string, order: { id: rows[0].id as string, status: rows[0].status === 'pending' ? 'created' : rows[0].status, total_cents: Number(rows[0].total_cents),
+      items: rows.map(row => ({ product_id: row.product_id as string, quantity: row.quantity as number, unit_price_cents: Number(row.unit_price_cents) })) } };
   }
   async list(after: string, limit: number, userId?: string) {
     const { rows } = await this.db.query(`SELECT o.id,o.status,o.total_cents,

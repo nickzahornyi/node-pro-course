@@ -15,9 +15,25 @@ export class AuthService {
   private readonly config = authConfig();
   private readonly logger = new Logger(AuthService.name);
   private readonly cleanup = setInterval(() => {
-    void this.db.query('DELETE FROM access_denylist WHERE expires_at <= now()').catch(() => this.logger.warn('Denylist cleanup failed'));
+    void this.cleanupExpiredAuth().catch(() => this.logger.warn('Auth cleanup failed'));
   }, 30000).unref();
+  private maintenance?: Promise<void>;
   constructor(private readonly db: DatabaseService) {}
+  cleanupExpiredAuth(): Promise<void> {
+    // Keep used refresh hashes while any descendant lives: they are reuse evidence.
+    return this.maintenance ??= this.db.transaction(async client => {
+      await client.query('DELETE FROM access_denylist WHERE expires_at <= now()');
+      await client.query(`WITH expired AS (
+        SELECT f.id FROM auth_families f
+        WHERE f.revoked_at <= now() - interval '10 minutes'
+          OR (f.revoked_at IS NULL AND f.created_at <= now() - interval '10 minutes' AND NOT EXISTS (
+            SELECT 1 FROM refresh_tokens r WHERE r.family_id=f.id AND r.expires_at>now()
+          ))
+        ORDER BY f.id LIMIT 100 FOR UPDATE OF f SKIP LOCKED
+      ) DELETE FROM auth_families f USING expired e WHERE f.id=e.id`);
+      // ON DELETE CASCADE removes the family's refresh history in the same commit.
+    }).finally(() => { this.maintenance = undefined; });
+  }
   onModuleDestroy() { clearInterval(this.cleanup); }
   private hash(token: string) { return createHmac('sha256',this.config.REFRESH_TOKEN_PEPPER).update(token).digest('hex'); }
   private async pair(client: PoolClient, user: {id: string; role: string}, familyId: string) {
@@ -50,7 +66,7 @@ export class AuthService {
       // Family lock serializes refresh, reuse detection and logout, including different generations.
       const {rows:[family]} = await client.query('SELECT * FROM auth_families WHERE id=$1 FOR UPDATE',[lookup.family_id]);
       const {rows:[old]} = await client.query('SELECT * FROM refresh_tokens WHERE token_hash=$1',[this.hash(token)]);
-      if (family.revoked_at) return null;
+      if (!family || !old || family.revoked_at) return null;
       if (old.used_at) {
         await this.revoke(client,family.id);
         this.logger.warn(`refresh_reuse family_id=${family.id}`);
