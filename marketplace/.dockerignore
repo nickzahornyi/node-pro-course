@@ -10,3 +10,7 @@ backups
 pacts
 logs
 dlq-archive
+
+.npm_token
+.pulumi
+infra/node_modules
