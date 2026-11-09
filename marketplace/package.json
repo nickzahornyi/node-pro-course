@@ -51,9 +51,15 @@
     "start:vault": "bash scripts/with-secrets.sh dev npm run start",
     "demo:auth": "bash scripts/with-secrets.sh dev bash scripts/auth-demo.sh auth",
     "demo:reuse": "bash scripts/with-secrets.sh dev bash scripts/auth-demo.sh reuse",
-    "demo:rbac": "bash scripts/with-secrets.sh dev bash scripts/auth-demo.sh rbac"
+    "demo:rbac": "bash scripts/with-secrets.sh dev bash scripts/auth-demo.sh rbac",
+    "demo:upload": "bash scripts/with-secrets.sh dev bash scripts/files-demo.sh upload",
+    "demo:multipart": "bash scripts/with-secrets.sh dev bash scripts/files-demo.sh multipart",
+    "demo:cdn": "bash scripts/with-secrets.sh dev bash scripts/files-demo.sh cdn",
+    "start:edge": "bash scripts/with-secrets.sh dev node dist/files/edge-main.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1160.0",
+    "@aws-sdk/s3-request-presigner": "^3.1160.0",
     "@nestjs/common": "11.1.6",
     "@nestjs/config": "4.0.2",
     "@nestjs/core": "11.1.6",

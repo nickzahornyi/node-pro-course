@@ -2,13 +2,44 @@ name: Marketplace tests and contracts
 on:
   pull_request:
   push:
-    branches: [main, hw-16, hw-18, hw-19, hw-22, hw-23, hw-24]
+    branches: [main, hw-16, hw-18, hw-19, hw-22, hw-23, hw-24, hw-26]
 permissions:
   contents: read
 defaults:
   run:
     working-directory: marketplace
 jobs:
+  files:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COMPOSE_PROJECT_NAME: marketplace-files-ci
+      SKIP_VAULT: '1'
+      DB_URL: postgresql://marketplace@127.0.0.1:6432/marketplace
+      DB_PASSWORD: marketplace-local-password
+      STORAGE_ENDPOINT: http://127.0.0.1:22650
+      STORAGE_ACCESS_KEY: hw26user
+      STORAGE_SECRET_KEY: hw26secretpass
+      STORAGE_BUCKET: hw26-files
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: marketplace/package-lock.json
+      - run: npm ci
+      - run: node scripts/ci-auth.mjs
+      - run: npx tsc --noEmit
+      - run: docker compose up -d --wait storage pgbouncer
+      - name: Files acceptance with multipart recovery twice
+        run: |
+          npm run demo:upload
+          npm run demo:multipart
+          npm run demo:multipart
+          npm run demo:cdn
+      - if: always()
+        run: docker compose down --volumes
   auth:
     runs-on: ubuntu-latest
     timeout-minutes: 10
