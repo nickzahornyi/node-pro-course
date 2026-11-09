@@ -1461,8 +1461,10 @@ edge не видає CloudFront signed URL. Для приватного конт
 
 120 секунд достатньо для аватарки з форми й обмежує час використання втраченого
 URL. Відкликати presigned окремо не можна; STS credentials можуть скоротити строк.
-Для демонстрації реального протермінування demo:upload запускає свій API з TTL
-3 секунди й повторює PUT тим самим URL після очікування; звичайний default — 120.
+У demo:upload звичайні URL, включно з put-offline і tampered, мають TTL 120 секунд.
+Лише після цих перевірок API перезапускається на іншому порту з TTL 3 секунди:
+він комітить попередній файл і видає окремий URL для expired. Демо перевіряє
+обидва строки й повторює PUT коротким URL після очікування.
 URL не пишуться в логи. Content-Type є заявою клієнта: magic-byte перевірка та
 сканування залишаються наступним етапом. Presigned PUT може перезаписувати той
 самий ключ до закінчення TTL; для суворої незмінності потрібне versioning із
@@ -1479,7 +1481,9 @@ S3 credentials, який сам викликає resume й доливає одн
 `npm run build && npm run start:edge` запускає локальний CDN. Він читає тільки
 `assets/` своїми S3 credentials, кешує відповіді з origin `public,max-age`, передає
 origin Cache-Control і ставить X-Cache: MISS/HIT. Кеш у пам'яті обмежено 128
-об'єктами; для великих production assets потрібен дисковий/керований CDN кеш.
+об'єктами. HEAD повертає ті самі заголовки й Content-Length, що GET, без тіла;
+demo:cdn перевіряє це для порожнього та прогрітого кешу. Для великих production
+assets потрібен дисковий/керований CDN кеш.
 `publishAsset` завантажує `assets/app.<sha256>.css` та ставить на об'єкті
 `public, max-age=31536000, immutable`. Нове тіло — новий URL, інвалідацій нуль;
 старе ім'я залишається HIT зі старими байтами. Звичайні uploads через edge
@@ -1509,8 +1513,11 @@ policy; замініть account, distribution і bucket на свої:
 
 Доступ на завантаження та Head/List/Complete надається окремій IAM ролі API;
 edge у production потребує лише GetObject на assets. Локально використано dev
-credentials емулятора. Lifecycle `AbortIncompleteMultipartUpload: 7 days`
-прибирає оплачені незавершені частини. Для PENDING старших за добу планується
+credentials емулятора. Lifecycle `AbortIncompleteMultipartUpload: 7 days` —
+рекомендація для production-бакета; у цьому стенді правило не налаштоване,
+`PutBucketLifecycleConfiguration` не викликається. Демо прибирають власні
+незавершені завантаження через AbortMultipartUpload у finally. Для PENDING
+старших за добу планується
 BullMQ cleanup: AbortMultipartUpload → DeleteObject → видалення рядка; такої
 production job у цьому ДЗ немає. Дампи HW-15 можна спрямувати в окремий backup
 prefix з retention policy; Glacier змінює RTO, restore-drill залишається потрібним.

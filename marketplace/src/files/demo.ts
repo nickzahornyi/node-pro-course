@@ -41,8 +41,8 @@ async function cleanup() {
   })();
 }
 for(const sig of ['SIGINT','SIGTERM'] as const) process.once(sig,()=>void cleanup().finally(()=>process.exit(1)));
-async function start() {
-  api=fork(new URL('./api-main.js',import.meta.url),[],{env:{...process.env,...(mode==='upload'?{STORAGE_PRESIGN_SECONDS:'3'}:{})},stdio:['ignore','ignore','inherit','ipc']});children.add(api);
+async function start(presignSeconds=120) {
+  api=fork(new URL('./api-main.js',import.meta.url),[],{env:{...process.env,STORAGE_PRESIGN_SECONDS:String(presignSeconds)},stdio:['ignore','ignore','inherit','ipc']});children.add(api);
   base=await new Promise<string>((resolve,reject)=>{
     const timer=setTimeout(()=>reject(new Error('API startup timed out')),15000);
     api!.once('message',(msg:any)=>{clearTimeout(timer);resolve(msg.base);});
@@ -81,21 +81,22 @@ try {
   if(mode==='upload') {
     const body=Buffer.from('direct upload');const key=randomUUID();const first=await intent(body.length,key);check('intent',first.status,200);
     const f=first.data;
+    assert.equal(f.expiresIn,120);
     check('key-from-server',Number(new RegExp(`^uploads/${userId}/[a-f0-9-]{36}\\.bin$`).test(f.key) && !f.key.includes('passwd')),1);
     const replay=await intent(body.length,key);assert.equal(replay.data.id,f.id);
     assert.equal((await request('/uploads/intent',{size:1,contentType:'text/html'},randomUUID())).status,400);
     const empty=await intent(3);const missing=await request('/uploads/commit',{id:empty.data.id});
     console.log(`commit-without-bytes=${missing.status}`);assert(missing.status>=400&&missing.status<500);
-    const exp=(await intent(4)).data.url;
     const port=new URL(base).port;await stop(api!);
     const alive=await new Promise<number>(resolve=>{const socket=connect(Number(port),'127.0.0.1');socket.once('connect',()=>{socket.destroy();resolve(1);});socket.once('error',()=>resolve(0));});check('api-alive',alive,0);
     const uploaded=await client([{url:f.url,size:body.length}]);check('put-offline',uploaded.status,200);
     const tampered=new URL(f.url);tampered.pathname=tampered.pathname.replace(/\.bin$/,'.other.bin');
     const bad=await fetch(tampered,{method:'PUT',body:Buffer.alloc(body.length)});await bad.arrayBuffer();check('tampered',bad.status,403);
-    // Same capability issued by intent, tested after its real TTL has elapsed.
-    await delay(4100);const expired=await fetch(exp,{method:'PUT',body:'late'});await expired.arrayBuffer();check('expired',expired.status,403);
-    await start();assert.notEqual(new URL(base).port,port);
+    // Only the expiration probe gets a short TTL, after the offline PUT is done.
+    await start(3);assert.notEqual(new URL(base).port,port);
     check('commit',(await request('/uploads/commit',{id:f.id})).status,200);
+    const exp=(await intent(4)).data;assert.equal(exp.expiresIn,3);
+    await delay(4100);const expired=await fetch(exp.url,{method:'PUT',body:'late'});await expired.arrayBuffer();check('expired',expired.status,403);
   } else if(mode==='multipart') {
     const size=15*MiB;const f=(await intent(size)).data;assert.equal(f.parts.length,3);
     // Ensure there is no object or unfinished upload from a previous run for this key.
@@ -118,8 +119,13 @@ try {
     edge=createEdge();await new Promise<void>(r=>edge!.listen(0,'127.0.0.1',r));
     const edgeBase=`http://127.0.0.1:${(edge.address() as any).port}/`;
     const miss=await fetch(edgeBase+oldKey);check('edge-miss',miss.status,200);assert.equal(miss.headers.get('x-cache'),'MISS');assert.equal(await miss.text(),oldBody.toString());
+    const headers=await fetch(edgeBase+oldKey,{method:'HEAD'});assert.equal(headers.status,200);
+    for(const name of ['content-type','content-length','cache-control']) assert.equal(headers.headers.get(name),miss.headers.get(name));
+    assert.equal(headers.headers.get('x-cache'),'HIT');assert.equal((await headers.arrayBuffer()).byteLength,0);
     const hit=await fetch(edgeBase+oldKey);check('edge-hit',hit.status,200);check('cache-hit',Number(hit.headers.get('x-cache')==='HIT'),1);await hit.text();
     const newKey=await publishAsset(newBody,namespace);objects.add(newKey);check('new-name',Number(newKey!==oldKey),1);
+    const coldHead=await fetch(edgeBase+newKey,{method:'HEAD'});assert.equal(coldHead.status,200);assert.equal(coldHead.headers.get('x-cache'),'MISS');
+    assert.equal(coldHead.headers.get('content-length'),String(newBody.length));assert.equal((await coldHead.arrayBuffer()).byteLength,0);
     const next=await fetch(edgeBase+newKey);check('new-url',next.status,200);check('content-changed',Number(await next.text()===newBody.toString()),1);
     const still=await fetch(edgeBase+oldKey);assert.equal(still.headers.get('x-cache'),'HIT');assert.equal(await still.text(),oldBody.toString());
   }
