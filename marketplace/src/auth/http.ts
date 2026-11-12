@@ -1,3 +1,4 @@
+import { requestContext } from '../observability/logger.js';
 import { Body, CanActivate, Controller, ExecutionContext, ForbiddenException, HttpCode, Injectable, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { AuthService, type Identity } from './auth.service.js';
@@ -8,6 +9,8 @@ export class AuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<AuthRequest>();
     req.identity = await this.auth.authenticate(req.headers.authorization?.match(/^Bearer (\S+)$/i)?.[1]);
+    const store = requestContext.getStore();
+    if (store) store.userId = req.identity.userId;
     return true;
   }
 }

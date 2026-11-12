@@ -1,3 +1,4 @@
+import { log } from '../observability/logger.js';
 import { Inject, Injectable, UnprocessableEntityException } from '@nestjs/common';
 import { DatabaseService } from '../database.service.js';
 import { type Queryable, validId } from './products.repository.js';
@@ -8,6 +9,7 @@ export class OrdersRepository {
   constructor(@Inject(DatabaseService) private readonly db: Queryable) {}
   // Caller owns the transaction; accepts a Pool or a transaction-bound Client.
   async create(userId: string, items: ItemInput[]) {
+    log('orders.repo').info({ event: 'create' });
     if (!items.length || items.some(i => !validId(i.product_id) || !Number.isSafeInteger(i.quantity) || i.quantity < 1 || i.quantity > 2147483647)
       || new Set(items.map(i => i.product_id)).size !== items.length) throw new UnprocessableEntityException('Invalid or duplicate product_id/quantity');
     const { rows: products } = await this.db.query('SELECT id,price_cents FROM products WHERE id=ANY($1::bigint[])', [items.map(i => i.product_id)]);
