@@ -1,0 +1,3 @@
+name: marketplace-kubernetes
+runtime: nodejs
+description: HW-28 local marketplace deployment

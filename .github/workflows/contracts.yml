@@ -2,13 +2,35 @@ name: Marketplace tests and contracts
 on:
   pull_request:
   push:
-    branches: [main, hw-16, hw-18, hw-19, hw-22, hw-23, hw-24, hw-26]
+    branches: [main, hw-16, hw-18, hw-19, hw-22, hw-23, hw-24, hw-26, hw-28]
 permissions:
   contents: read
 defaults:
   run:
     working-directory: marketplace
 jobs:
+  production-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm --prefix infra ci && npm --prefix infra run check
+      - run: node -e "require('fs').writeFileSync('.npm_token',require('crypto').randomBytes(32).toString('hex'),{mode:0o600})"
+      - run: npm run image:build
+      - name: Install pinned Trivy CLI
+        run: |
+          curl -fsSL --retry 3 https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz -o "$RUNNER_TEMP/trivy.tar.gz"
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP" trivy
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Computed production vulnerability gate
+        run: npm run scan
+        env:
+          SCAN_MAX: '50'
+      - if: always()
+        run: rm -f .npm_token
   files:
     runs-on: ubuntu-latest
     timeout-minutes: 10

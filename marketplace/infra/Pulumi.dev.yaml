@@ -1,0 +1,5 @@
+config:
+  marketplace-kubernetes:namespace: marketplace-hw28
+  marketplace-kubernetes:image: marketplace:hw28
+  marketplace-kubernetes:profile: hardened
+  marketplace-kubernetes:revision: initial

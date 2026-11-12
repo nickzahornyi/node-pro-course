@@ -895,6 +895,61 @@ Nest на вільному порту та закривають сервер і 
 
 ## Grading
 
+Для здачі ДЗ #28 у LMS використовуйте **[PR #16, гілка hw-28](https://github.com/nickzahornyi/node-pro-course/pull/16)**.
+PR #14 — попереднє ДЗ #24; він не містить цієї роботи.
+
+HW-28: Node.js 22+, Docker Desktop, kind, kubectl, Pulumi, Trivy.
+На macOS відсутні CLI встановлюються `brew install kind kubectl pulumi trivy`.
+Команди зі свіжого клону (термінал bash):
+
+```bash
+cd marketplace
+export SKIP_VAULT=1
+export DB_PASSWORD=hw28-grading-db
+export AUTH_SECRET=hw28-grading-realtime-secret-at-least-32-chars
+export PULUMI_BACKEND_URL="file://$PWD/.pulumi"
+export PULUMI_CONFIG_PASSPHRASE=hw28-grading-state
+eval "$(node --input-type=module <<'JS'
+import {generateKeyPairSync,randomBytes} from 'node:crypto';
+const k=generateKeyPairSync('ec',{namedCurve:'P-256'});
+console.log('export JWT_KID=hw28-grader');
+console.log('export JWT_PRIVATE_KEY='+Buffer.from(k.privateKey.export({type:'pkcs8',format:'pem'})).toString('base64'));
+console.log('export JWT_PUBLIC_KEY='+Buffer.from(k.publicKey.export({type:'spki',format:'pem'})).toString('base64'));
+console.log('export REFRESH_TOKEN_PEPPER='+randomBytes(32).toString('base64'));
+JS
+)"
+npm ci
+npm --prefix infra ci
+(cd infra && npx tsc --noEmit)
+printf 'dummy-npm-token' > .npm_token
+npm run image:build
+npm run demo:image
+npm run cluster:up
+npm run up
+# Однаковий помірний темп для фону і викочування; нуль збоїв не припускаємо.
+export LOAD_WORKERS=1
+export LOAD_INTERVAL_MS=5
+npm run demo:baseline # без зміни Deployment чи ревізії
+npm run demo:rollout
+npm run demo:pdb
+SCAN_MAX=-1 npm run scan    # gate=fail, exit 1 — очікувано
+SCAN_MAX=99999 npm run scan # gate=pass, exit 0
+# За бажанням: вимір зламаного профілю; наприкінці відновлюється hardened.
+ROLLOUT_PROFILE=broken npm run demo:rollout
+# Після перевірок:
+npm run destroy
+npm run cluster:down
+```
+
+`up`, `destroy`, `demo:baseline`, `demo:rollout`, `demo:pdb` проходять через наявний
+`scripts/with-secrets.sh dev …`; у звичайній роботі `SKIP_VAULT` не задається.
+Файловий backend Pulumi обов'язковий, Pulumi Cloud не потрібен. State містить
+секрети у зашифрованому вигляді, `.pulumi/` і `.npm_token` ігноруються git та
+Docker build context. При втраті passphrase state не відновити.
+Попередні HW-26/HW-24/HW-23 команди збережені нижче.
+
+### Попередні перевірки HW-26
+
 ```bash
 cd marketplace
 export SKIP_VAULT=1
@@ -1558,3 +1613,165 @@ content-changed=1
 
 Додатково: `npx tsc --noEmit`, 46/46 наявних тестів (`npm test`), статична
 перевірка обгорток та скан вмісту на приватні ключі/живі env URL — успішні.
+
+
+## Kubernetes
+
+ДЗ #28 розгортає той самий Nest Marketplace API, а не окремий health-only сервіс.
+kind — один control-plane вузол, NodePort 30080 → host `127.0.0.1:22800`.
+Підіймав на macOS ARM64 / Docker Desktop із 7,75 GiB RAM для Docker VM
+(8 321 515 520 байтів за `docker info`). Окремого memory flag у kind немає:
+вузол ділить бюджет Docker. Другого локального кластера не запускаємо.
+
+| Змінна | Джерело | Призначення |
+| --- | --- | --- |
+| `DB_PASSWORD` | сховище Infisical (#11); export у Grading | Пароль PostgreSQL, обов'язковий для цього розгортання |
+| `AUTH_SECRET` | сховище Infisical (#11); export у Grading | Наявний realtime HMAC ключ, ≥32 символи |
+| `JWT_KID` | сховище Infisical (#11) | Ідентифікатор ES256 ключа |
+| `JWT_PRIVATE_KEY` | сховище Infisical (#11) | PKCS8 PEM у base64 |
+| `JWT_PUBLIC_KEY` | сховище Infisical (#11) | SPKI PEM у base64 |
+| `REFRESH_TOKEN_PEPPER` | сховище Infisical (#11) | Наявний pepper refresh tokens |
+| `PULUMI_CONFIG_PASSPHRASE` | сховище Infisical (#11); export у Grading | Шифрування локального state, не передається в Pod |
+| `PULUMI_BACKEND_URL` | export; default `file://$PWD/.pulumi` | Тільки локальний файловий backend |
+| `KIND_CLUSTER_NAME` | Оточення; default `hw28` | Ім'я кластера, context `kind-hw28` |
+| `IMAGE` | Оточення; default `marketplace:hw28` | Тег для build/load/scan/Pulumi; fallback у infra/Pulumi.dev.yaml |
+| `NPM_TOKEN_FILE` | Локальний тимчасовий файл; default `.npm_token` | BuildKit секрет, для public npm лише приманка |
+| `SCAN_MAX` | CI / оточення; default 50 | Максимум виправних HIGH+CRITICAL знахідок |
+| `LOAD_WORKERS` | Оточення; default 16 | Число паралельних клієнтів, 1–256 |
+| `LOAD_INTERVAL_MS` | Оточення; default 0 | Пауза після кожної відповіді на кожному воркері, 0–60000 мс |
+| `LOAD_MAX_SECONDS` | Оточення; default 300 | Бюджет дозбору 5000 запитів після rollout або вікна baseline, 1–3600 с |
+| `LOAD_BASELINE_SECONDS` | Оточення; default 20 | Мінімальне вікно baseline без rollout, 1–300 с |
+| `ROLLOUT_PROFILE` | Оточення; default `hardened` | Нормальний або навмисно зламаний вимір |
+
+Pulumi першою дією перевіряє всі обов'язкові змінні й називає відсутні,
+до створення provider або звернення до кластера. Namespace, Deployment API,
+Deployment PostgreSQL, два Services, Secret, PDB та HPA створює тільки
+`infra/index.ts`. `kubectl apply` не використовується. Secret `data` кодується
+base64 і позначається `pulumi.secret`; Deployment має тільки envFrom/secretKeyRef.
+Це відокремлює секрети від git, але base64 не є шифруванням etcd. У production
+потрібні RBAC, encryption at rest і мінімальні права. ESO синхронізує секрети
+із зовнішнього менеджера в K8s Secret; Secrets Store CSI Driver монтує їх у Pod.
+Оператори в цьому локальному стенді не встановлюються.
+
+Production Dockerfile окремий (`docker/Dockerfile`), щоб не зламати попередній
+compose ops-образ із PostgreSQL CLI. Дві стадії: Debian Node builder і distroless
+Node 22 runtime. USER/runAsUser — числовий 65532. npm-токен читається лише
+через RUN --mount=type=secret; немає ARG із секретом, COPY секрету чи env-файлів.
+Public npm токена не потребує, тому demo:image генерує випадкову приманку,
+перезбирає образ і шукає її в history, config та байтах усіх docker save layers,
+включно з нижніми шарами, де COPY + rm лишив би файл. Shell перевіряється
+справжнім docker run --entrypoint sh; UID — process.getuid() у runtime.
+
+Trivy формує JSON-звіт про виправні HIGH/CRITICAL знахідки. `scripts/scan.mjs`
+підраховує `Results[].Vulnerabilities`, звіряє кількість зі SCAN_MAX та повертає
+відповідний exit code; помилка сканера ніколи не стає gate=pass. Робочий поріг
+50 використовується тим самим npm run scan у CI. Це бюджет, а не обіцянка
+образу без CVE: звіт і gate можуть змінюватися разом із базою сканера.
+
+`/healthz` перевіряє живий процес, `/readyz` — готовність і доступність PostgreSQL.
+Перед listen є прогрів 4 с. На SIGTERM ready стає false, сокет ще 5 с приймає
+трафік для поширення EndpointSlice/kube-proxy, потім app.close закриває сервер
+і пул. terminationGracePeriodSeconds=20 > drain=5. RollingUpdate:
+maxUnavailable=0, maxSurge=1, readiness period=1 с, minReadySeconds=2.
+Ініціалізатор у кожному Pod застосовує міграції під PostgreSQL advisory lock;
+PostgreSQL у стенді використовує emptyDir: це одноразова локальна БД,
+не production persistence чи гарантія zero downtime під час зміни схеми БД.
+
+StartupProbe дає процесу до 30×1=30 с на старт; до її успіху liveness/readiness
+не викликаються. Після старту liveness має period=3 с та failureThreshold=3,
+тобто приблизно 9 с постійної несправності до рестарту. Збільшений
+initialDelaySeconds затримував би перевірку навіть швидкого старту;
+startupProbe переходить до звичайного режиму одразу після першого успіху.
+
+PDB minAvailable=1 при replicas=2 дозволяє одне добровільне виселення.
+demo:pdb чекає currentHealthy=2 і disruptionsAllowed≥1, викликає справжній
+policy/v1 Eviction API через локальний kubectl proxy та читає HTTP-коди.
+Перший запит витрачає бюджет, другий виселяє інший початковий Pod і має 429.
+Після виміру чекаємо новий здоровий Pod і відновлення бюджету; delete pod
+для демонстрації не використовується, бо він обходить PDB.
+
+HPA autoscaling/v2: minReplicas=2, maxReplicas=4, CPU utilization=70% і CPU
+requests у контейнера. У kind немає metrics-server, тому CPU unknown та
+відсутність масштабування очікувані. `spec.replicas=2` лишається для цього
+локального кластера. У production з metrics-server Pulumi та HPA конфліктували б
+за це поле; тоді replicas потрібно виключити з керування Pulumi (ignoreChanges
+і узгоджений життєвий цикл state), а масштабування віддати HPA.
+
+Rollout: числовий profile=1 означає hardened, profile=0 — broken. Генератор
+з налаштовуваною кількістю клієнтів пише кожен HTTP-код у власний tempfile, transport
+errors — 000. Запити не повторюються приховано; requests/ok/failed читаються
+з цього файла, після ≥5000 запитів і завершення rollout. Міряється зміна REV
+у pod template через Pulumi, не kubectl patch. Зламаний профіль прибирає проби,
+дозволяє maxUnavailable=1 та закриває сокет без дренажу; після виміру hardened
+відновлюється. Генератор і тимчасовий файл прибираються у finally. Навантаження налаштовується
+через LOAD_WORKERS і LOAD_INTERVAL_MS; вивід містить їхні фактичні значення.
+Пауза не є глобальним RPS-лімітом: кожен воркер чекає її після завершення запиту.
+Для повільного темпу бюджет очікування LOAD_MAX_SECONDS збільшено до 300 с;
+мінімум 5000 запитів та вимога failed=0 зберігаються.
+
+`demo:baseline` використовує той самий генератор, URL, темп, таймаут 2 с та
+підрахунок кодів, але тільки читає стан hardened Deployment: не виконує Pulumi up
+і не змінює ревізію. Він працює щонайменше LOAD_BASELINE_SECONDS і до 5000 запитів.
+Baseline теж завершується помилкою при failed>0. Порівнюйте його з rollout
+на тих самих налаштуваннях; помилки фону означають шум середовища, а не доказ
+проблеми дренажу. Ні HTTP-помилки, ні 000 не відкидаються, повторних спроб немає.
+Історичні числа нижче отримано з 16 воркерами без паузи.
+
+### Власні виміри HW-28
+
+Фактичні прогони 2026-11-09, kind 0.33.0 / Kubernetes 1.35.0, Docker VM
+7,75 GiB; kind control-plane разом із сервісами споживав близько 1,066 GiB.
+Кластер був готовий за 18 с після завантаження node image. Pulumi up двічі:
+спершу 10 ресурсів створено, потім 10 unchanged.
+
+```text
+# demo:image
+stages=2
+shell-inside=0
+runtime-uid=65532
+token-in-history=0
+token-in-config=0
+token-in-layers=0
+
+# demo:rollout, hardened
+profile=1
+requests=70701
+ok=70701
+failed=0
+rollout-seconds=21.898
+
+# demo:rollout, hardened — повторний прогін
+profile=1
+requests=62028
+ok=62028
+failed=0
+rollout-seconds=18.882
+
+# demo:rollout, broken (після виміру hardened відновлено)
+profile=0
+requests=19312
+ok=12775
+failed=6537
+rollout-seconds=6.943
+
+# demo:pdb
+healthy=2
+minAvailable=1
+evict-1=201
+evict-2=429
+```
+
+Trivy: found=28, max-allowed=-1 → gate=fail / exit 1;
+max-allowed=99999 → gate=pass / exit 0. Кількість CVE залежить від дати бази.
+Усі 7 обов'язкових змінних перевірено окремими env -u: preview exit 1 і назва
+відсутньої змінної в повідомленні. З фактичного кластера перевірено різні проби,
+maxUnavailable=0, grace>drain, HPA v2 2..4, PDB budget=1 після відновлення та
+нуль значень runtime Secret у Deployment. 46/46 попередніх API тестів пройшли.
+
+Повторна перевірка 2026-11-12 з `LOAD_WORKERS=1 LOAD_INTERVAL_MS=5`:
+baseline — requests=5008, ok=5008, failed=0, baseline-seconds=43.363;
+rollout — requests=5007, ok=5007, failed=0, rollout-seconds=17.884.
+Generation Deployment до й після baseline однакова. 50/50 тестів пройшли,
+зокрема перевірки 1/2 воркерів, паузи, збереження 503/000 і відмови на
+некоректних env. Ці результати стосуються цього прогону; помилки на іншій машині
+слід звіряти з її baseline за тих самих параметрів, а не віднімати з failed.
