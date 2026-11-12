@@ -1,6 +1,6 @@
 # Marketplace API contract
 
-Для поточного ДЗ **HW-24** починайте з [Auth](#auth) та [Grading](#grading).
+Для поточного ДЗ **HW-29** починайте з [Observability](#observability) та [Grading](#grading).
 Усі npm/Compose-команди виконуються в `marketplace/` після клонування репозиторію.
 Розділ HW-12 нижче збережено як окремий SQL-стенд попереднього завдання.
 
@@ -895,6 +895,58 @@ Nest на вільному порту та закривають сервер і 
 
 ## Grading
 
+HW-29: Node.js 22+, npm і Docker Desktop. Без хмарного акаунта.
+Усі наведені команди виконуються з каталогу `marketplace`, де є package.json.
+Перший блок копіюється зі свіжого клону (bash):
+
+```bash
+cd marketplace
+export SKIP_VAULT=1
+export OTEL_SERVICE_NAME=marketplace
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:22918
+export PROMETHEUS_URL=http://127.0.0.1:22901
+export TRACE_API_URL=http://127.0.0.1:22904
+export GRAFANA_ADMIN_USER=admin
+export GRAFANA_ADMIN_PASSWORD=hw29-local-demo
+export OBS_DB_URL=postgresql://observability:observability@127.0.0.1:22932/observability
+npm ci
+bash scripts/with-secrets.sh dev docker compose -f observability/compose.yml up -d --wait
+npx tsc --noEmit
+npm run demo:logs
+npm run demo:metrics
+npm run demo:trace
+```
+
+Для заповненого дашборда в тому самому терміналі:
+
+```bash
+npm run build
+OBS_PORT=22910 npm run start:observability
+```
+
+У другому терміналі (після тих самих export) створіть трафік:
+
+```bash
+for i in $(seq 1 100); do
+  curl -s http://127.0.0.1:22910/products/1/card >/dev/null
+  curl -s http://127.0.0.1:22910/products/999/card >/dev/null
+  sleep 0.1
+done
+curl -s http://127.0.0.1:22910/products/998/card
+curl -fsS "$PROMETHEUS_URL/api/v1/query?query=up"
+```
+
+Grafana: http://127.0.0.1:22900/d/marketplace-red, логін і пароль з export.
+Jaeger: http://127.0.0.1:22904. Зупинення API — Ctrl-C (прибирає власну SQL-схему).
+Стек: `bash scripts/with-secrets.sh dev docker compose -f observability/compose.yml down`.
+Наявний повний Nest API запускається як раніше через `npm run start:vault`;
+для його скрейпінгу задайте `PORT=22910` і наявні DB/auth секрети з HW-24/28.
+Локальний демонстраційний API викликає ті самі класи контролера/сервісу/репозиторію,
+але має ізольовані SQL fixtures і контрольовані відмови; він не є повним auth API.
+
+### Історичний Grading HW-28
+
+
 Для здачі ДЗ #28 у LMS використовуйте **[PR #16, гілка hw-28](https://github.com/nickzahornyi/node-pro-course/pull/16)**.
 PR #14 — попереднє ДЗ #24; він не містить цієї роботи.
 
@@ -1775,3 +1827,96 @@ Generation Deployment до й після baseline однакова. 50/50 тес
 зокрема перевірки 1/2 воркерів, паузи, збереження 503/000 і відмови на
 некоректних env. Ці результати стосуються цього прогону; помилки на іншій машині
 слід звіряти з її baseline за тих самих параметрів, а не віднімати з failed.
+
+
+## Observability
+
+Pino пише JSON у stdout. `trace_id` береться з `trace.getActiveSpan()` у mixin;
+власний UUID для кореляції не генерується. AsyncLocalStorage зберігає `tenant`,
+`idempotencyKey`, а після успішного AuthGuard — перевірений `userId` з HW-24.
+Ініціалізація OTel — перший імпорт main.ts; ручні серверні та вкладені спани
+використовують W3C propagation й OTel AsyncLocalStorage context manager.
+Сервер продовжує вхідний traceparent; 5xx → ERROR, 4xx → Unset.
+Шлях картки товару: products.controller → products.service → products.repo.
+Оформлення замовлення також логоване в трьох шарах без передачі req заради логів.
+
+| Змінна | Джерело | Призначення |
+| --- | --- | --- |
+| OTEL_EXPORTER_OTLP_ENDPOINT | Infisical dev/prod (#11); export у Grading | Базовий OTLP HTTP URL; експортер додає /v1/traces |
+| OTEL_SERVICE_NAME | Infisical / export | Ім'я сервісу OTel |
+| PROMETHEUS_URL | Infisical / export | API Prometheus для перевірки скрейпінгу |
+| TRACE_API_URL | Infisical / export | Jaeger Query API; demo:trace додатково чекає експортований трейс |
+| GRAFANA_ADMIN_USER | Infisical / export | Адміністратор локального Grafana |
+| GRAFANA_ADMIN_PASSWORD | Infisical / export | Пароль Grafana, Compose вимагає явного значення |
+| OBS_DB_URL | Infisical / export у Grading | Ізольований PostgreSQL демо, не production DB |
+| OBS_PORT | export, лише для локального стенда | 22910 для постійного API; демо вибирають вільний порт |
+| SKIP_VAULT | grader/CI export | Уже наявний аварійний вхід обгортки |
+
+Нових env-файлів немає. Усі три npm demo-скрипти містять
+`scripts/with-secrets.sh` безпосередньо; адреси й креденшели для звичайного
+запуску додаються в наявний Infisical. Доступ до live Infisical не перевірявся.
+Локальні credentials PostgreSQL у compose є лише фікстурою одноразового стенда.
+
+Не логуємо тіла запитів, query strings, cookies і сирі URL. Redaction явно
+покриває `headers.authorization`, `req.headers.authorization`, `req.body`, `body`,
+`password`, `token`, `refresh_token`, `credentials.password`, `user.password`.
+Довільний вкладений об'єкт автоматично не захищається: його не слід передавати
+логеру без окремого контракту та redact path. Auth request має рядок `event=request`,
+але body й bearer token до нього не потрапляють.
+
+RED рахується один раз на finish/close, включно з помилками. Лейбли:
+method (обмежений набір), route (`req.route.path`, для невідомих — `unmatched`),
+status (HTTP-код). ID, tenant, userId і trace_id у метрики не потрапляють.
+
+| Панель / питання RED | PromQL |
+| --- | --- |
+| Rate: скільки запитів/с за маршрутом? | `sum by (method, route) (rate(http_requests_total[1m]))` |
+| Errors: яка частка запитів повертає 5xx? | `sum(rate(http_requests_total{status=~"5.."}[1m])) / clamp_min(sum(rate(http_requests_total[1m])), 0.000001)` |
+| Duration: який p95 за маршрутом? | `histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket[1m])))` |
+
+Файл: `observability/grafana/dashboards/red.json`. Обидва datasources і dashboard
+provisioning лежать поряд у репозиторії. Вікно rate — 1 хвилина, scrape — 5 с.
+Бакети у секундах: **0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5,
+10, 30, 60, 120**, далі автоматичний +Inf. Демо містить справжній `pg_sleep(1.2)`;
+120 с дає запас понад цей найгірший контрольований випадок. Це не обіцянка
+обмеження будь-якого production-запиту: поза діапазоном потрібні нові бакети.
+`above-top-bucket` обчислюється як count мінус bucket{le="120"}.
+
+Кожне демо стартує новий процес, реєстр метрик і exporter, створює власну SQL-схему
+та видаляє її при завершенні. demo:logs перевіряє одиночний запит, burst із 8
+паралельних запитів із різними traceparent та auth-запит із двома маркерами.
+demo:metrics прогріває success/error series, порівнює два HTTP-скрейпи /metrics,
+робить 60 запитів (50 успішних, 10 з 500), включаючи повільний, потім 100 різних
+ID; нових series не має бути. demo:trace провокує PostgreSQL division-by-zero,
+робить forceFlush, звіряє реальні span IDs, батьків, вхідний traceparent і JSON-логи;
+коли TRACE_API_URL заданий, перевіряє також появу трейса в Jaeger.
+Значення не підставляються за очікуваннями: провал будь-якого assert дає exit 1.
+
+### Власні виміри HW-29
+
+Фактична перевірка 2026-11-12, Node 22.14.0, Docker Desktop ARM64,
+7.75 GiB RAM для Docker VM. Усі три демо пройшли **тричі поспіль**, exit 0,
+з однаковими числами; trace перевірявся також через Jaeger API.
+
+| Демо | Прогін 1 | Прогін 2 | Прогін 3 |
+| --- | --- | --- | --- |
+| logs | layers=4, burst=8, burst-trace-ids=8, burst-uneven=0 | так само | так само |
+| metrics | sent-ok=50, sent-fail=10, counter-delta=60, errors-delta=10, series=2→2, above-top-bucket=0 | так само | так само |
+| trace | spans=2, orphan-spans=0, trace-matches-header=1, trace-matches-log=1, span-status-error=1 | так само | так само |
+
+У logs усі три прогони також дали non-json-lines=0, distinct-trace-ids=1,
+trace-id-matches-header=1, secret-req-logged=1, secret-in-logs=0.
+`npm ci`, `npx tsc --noEmit` та 50/50 наявних тестів — успішні.
+
+`docker stats --no-stream`: до запуску — жодного працюючого контейнера;
+після старту PostgreSQL 58.90 MiB, Prometheus 21.71 MiB, Jaeger 11.03 MiB,
+Grafana 78.99 MiB, разом **170.63 MiB**. Після демо та HTTP-трафіку:
+63.44 + 25.49 + 20.42 + 78.97 = **188.32 MiB**.
+Кластер HW-28 під час цього виміру вимкнений, спільне споживання не виміряне.
+Для планування: його попередній вимір ~1.066 GiB плюс цей стенд ~0.184 GiB
+дають ~1.25 GiB, нижче 7.75 GiB бюджету VM; це оцінка, а не спільний замір.
+Перед здачею з активним кластером повторіть `docker stats --no-stream`.
+
+API Grafana підтвердив три provisioned панелі; Prometheus бачить target
+`marketplace` на 22910. Для rate/quantile потрібні щонайменше два скрейпи
+та запити між ними: без приросту гістограми p95 закономірно NaN.

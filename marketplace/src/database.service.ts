@@ -1,3 +1,5 @@
+import { tracer } from './observability/http.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { readFile } from 'node:fs/promises';
@@ -33,7 +35,13 @@ export class DatabaseService implements OnModuleDestroy {
     await this.pool.end();
   }
 
-  query(sql: string, parameters?: unknown[]) { return this.pool.query(sql, parameters); }
+  query(sql: string, parameters?: unknown[]) {
+    return tracer.startActiveSpan('postgres.query', async span => {
+      try { return await this.pool.query(sql, parameters); }
+      catch (error) { span.setStatus({ code: SpanStatusCode.ERROR }); throw error; }
+      finally { span.end(); }
+    });
+  }
 
   async transaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();

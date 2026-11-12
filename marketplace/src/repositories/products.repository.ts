@@ -1,3 +1,6 @@
+import { log } from '../observability/logger.js';
+import { tracer } from '../observability/http.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { Inject, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database.service.js';
 
@@ -17,6 +20,14 @@ export class ProductsRepository {
     return (await this.db.query('SELECT * FROM products WHERE id=$1', [id])).rows[0] ?? null;
   }
   async card(id: string) {
+    return tracer.startActiveSpan('products.repo.card', async span => {
+      try { return await this.loadCard(id); }
+      catch (error) { span.setStatus({ code: SpanStatusCode.ERROR }); throw error; }
+      finally { span.end(); }
+    });
+  }
+  private async loadCard(id: string) {
+    log('products.repo').info({ event: 'card' });
     if (!validId(id)) return null;
     return (await this.db.query(`SELECT p.id,p.name,p.price_cents,p.stock,u.display_name AS seller_name,
       COALESCE(s.units_sold,0)::text AS units_sold,COALESCE(s.orders_count,0)::text AS orders_count
