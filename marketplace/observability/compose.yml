@@ -1,0 +1,45 @@
+name: marketplace-observability
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: observability
+      POSTGRES_PASSWORD: observability
+      POSTGRES_DB: observability
+    ports: ['127.0.0.1:22932:5432']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U observability']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  prometheus:
+    image: prom/prometheus:v3.0.0
+    ports: ['127.0.0.1:22901:9090']
+    volumes: ['./prometheus.yml:/etc/prometheus/prometheus.yml:ro']
+    extra_hosts: ['host.docker.internal:host-gateway']
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://localhost:9090/-/ready']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: 'true'
+    ports: ['127.0.0.1:22918:4318', '127.0.0.1:22904:16686']
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: '${GRAFANA_ADMIN_USER:?Export GRAFANA_ADMIN_USER through with-secrets or Grading}'
+      GF_SECURITY_ADMIN_PASSWORD: '${GRAFANA_ADMIN_PASSWORD:?Export GRAFANA_ADMIN_PASSWORD through with-secrets or Grading}'
+    ports: ['127.0.0.1:22900:3000']
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus: {condition: service_healthy}
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://localhost:3000/api/health']
+      interval: 2s
+      timeout: 2s
+      retries: 30

@@ -1,3 +1,4 @@
+import { log } from './observability/logger.js';
 import { Injectable, UnprocessableEntityException } from '@nestjs/common';
 import { DatabaseService } from './database.service.js';
 import { OrdersRepository, type ItemInput } from './repositories/orders.repository.js';
@@ -9,6 +10,7 @@ export class OrderCreationService {
   constructor(private readonly db: DatabaseService) {}
 
   async create(key: string, body: { items: ItemInput[] }, options: WriteOptions = {}, userId?: string) {
+    log('orders.service').info({ event: 'create' });
     if (userId) key = `user:${userId}:${key}`;
     const result = await this.db.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [key]);

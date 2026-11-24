@@ -1,3 +1,4 @@
+import { log } from './observability/logger.js';
 import { BadRequestException, Body, Controller, Get, Headers, HttpException, NotFoundException, Post, Query, Param, Res } from '@nestjs/common';
 import { Req, UseGuards, ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
 import { AuthGuard, ProductWriteGuard, type AuthRequest } from './auth/http.js';
@@ -43,6 +44,7 @@ export class MarketplaceController {
     return productDto(product);
   }
   @Get('products/:productId/card') async getCard(@Param('productId') id: string) {
+    log('products.controller').info({ event: 'card' });
     const product = await this.cachedProducts.card(id);
     if (!product) throw new NotFoundException('Product not found');
     return product;
@@ -61,6 +63,7 @@ export class MarketplaceController {
     return result.order;
   }
   @Post('orders') @UseGuards(AuthGuard) async createOrder(@Req() req: AuthRequest, @Headers('idempotency-key') key: string, @Body() body: { items: ItemInput[] }, @Res({ passthrough: true }) response: Response) {
+    log('orders.controller').info({ event: 'create' });
     const result = await this.creation.create(key, body, {}, req.identity.userId);
     if (result.replay) response.setHeader('Idempotency-Replay', 'true');
     return result.order;

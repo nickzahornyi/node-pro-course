@@ -1,3 +1,4 @@
+import { observeHttp } from './observability/http.js';
 import { Catch, HttpException, type ArgumentsHost, type ExceptionFilter, type INestApplication } from '@nestjs/common';
 import express from 'express';
 import * as OpenApiValidator from 'express-openapi-validator';
@@ -17,6 +18,7 @@ class ProblemFilter implements ExceptionFilter {
   }
 }
 export function configureApp(app: INestApplication, shutdownHooks = true): void {
+  app.use(observeHttp);
   app.use(express.json());
   const redis = app.get(RedisService);
   if (redis.limiter) app.use(['/products', '/session', '/orders'], rateLimitMiddleware(redis.limiter));
