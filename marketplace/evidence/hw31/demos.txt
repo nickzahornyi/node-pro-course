@@ -1,0 +1,5 @@
+lane=localstack
+state-resources-left=0
+failover=not-evaluated
+alb=not-evaluated
+nat=not-evaluated

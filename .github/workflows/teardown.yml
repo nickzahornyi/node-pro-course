@@ -1,0 +1,52 @@
+name: HW31 LocalStack lifecycle and teardown
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: hw31-localstack-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  localstack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: marketplace
+    env:
+      SKIP_VAULT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pulumi/actions@v6
+        with:
+          pulumi-version: '3.274.1'
+      - name: Install and typecheck both stacks
+        run: |
+          npm ci --prefix infra/base
+          npm ci --prefix infra/demo
+          npm run check --prefix infra/base
+          npm run check --prefix infra/demo
+      # Local lane deliberately uses neither AWS credentials nor GitHub OIDC:
+      # the trust policy is a review artifact, not a verified authentication flow.
+      - name: Reproduce local evidence and pulumi destroy
+        run: npm run hw31:verify
+      - name: Retry cleanup on failure
+        if: failure()
+        run: |
+          npm run destroy:demo
+          npm run destroy:base
+          node demo/hw31-teardown.mjs
+      - name: Upload actual local evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw31-localstack-evidence
+          path: marketplace/evidence/hw31/
+      - name: Stop LocalStack
+        if: always()
+        run: npm run hw31:stop

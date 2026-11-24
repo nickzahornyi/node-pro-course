@@ -1,0 +1,3 @@
+name: hw31-base
+runtime: nodejs
+description: HW-31 LocalStack only

@@ -1,0 +1,30 @@
+Previewing destroy (demo):
+
+@ previewing destroy....
+ -  aws:iam:Role lambda delete 
+ -  pulumi:providers:aws localstack delete 
+ -  pulumi:pulumi:Stack hw31-demo-demo delete 
+@ previewing destroy....
+ -  pulumi:pulumi:Stack hw31-demo-demo delete 
+    pulumi:pulumi:Stack hw31-demo-demo  
+Resources:
+    - 3 to delete
+
+Destroying (demo):
+
+@ destroying....
+ -  aws:iam:Role lambda deleting (0s) 
+ -  aws:iam:Role lambda deleted (0.01s) 
+ -  pulumi:providers:aws localstack deleting (0s) 
+@ destroying....
+ -  pulumi:providers:aws localstack deleted (0.38s) 
+ -  pulumi:pulumi:Stack hw31-demo-demo deleting (0s) 
+ -  pulumi:pulumi:Stack hw31-demo-demo deleted (0.00s) 
+    pulumi:pulumi:Stack hw31-demo-demo  
+Resources:
+    - 3 deleted
+
+Duration: 3s
+
+The resources in the stack have been deleted, but the history and configuration associated with the stack are still maintained. 
+If you want to remove the stack completely, run `pulumi stack rm demo`.

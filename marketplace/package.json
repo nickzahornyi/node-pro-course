@@ -69,7 +69,19 @@
     "demo:logs": "bash scripts/with-secrets.sh dev node demo/observability.mjs logs",
     "demo:metrics": "bash scripts/with-secrets.sh dev node demo/observability.mjs metrics",
     "demo:trace": "bash scripts/with-secrets.sh dev node demo/observability.mjs trace",
-    "start:observability": "bash scripts/with-secrets.sh dev node demo/observability-server.mjs"
+    "start:observability": "bash scripts/with-secrets.sh dev node demo/observability-server.mjs",
+    "up:base": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh up base",
+    "up:demo": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh up demo",
+    "destroy:base": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh destroy base",
+    "destroy:demo": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh destroy demo",
+    "demo:failover": "bash scripts/with-secrets.sh dev node demo/failover.mjs",
+    "demo:nat": "bash scripts/with-secrets.sh dev node demo/nat.mjs",
+    "demo:alb": "bash scripts/with-secrets.sh dev node demo/alb.mjs",
+    "hw31:start": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh start",
+    "hw31:stop": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh stop",
+    "hw31:verify": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh verify",
+    "hw31:evidence": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh evidence",
+    "hw31:iam": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh iam"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",

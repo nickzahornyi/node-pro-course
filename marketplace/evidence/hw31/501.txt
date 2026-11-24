@@ -1,0 +1,65 @@
+Updating (demo):
+
+ +  pulumi:pulumi:Stack hw31-demo-demo creating (0s) 
+ +  pulumi:pulumi:Stack hw31-demo-demo creating (0s) read pulumi:pulumi:StackReference organization/hw31-base/base
+@ updating....
+ +  pulumi:pulumi:Stack hw31-demo-demo creating (0s) read pulumi:pulumi:StackReference organization/hw31-base/base
+@ updating....
+ +  pulumi:providers:aws localstack creating (0s) 
+ +  pulumi:providers:aws localstack created (0.02s) 
+ +  aws:iam:Role lambda creating (0s) 
+ +  aws:rds:SubnetGroup db creating (0s) 
+ +  aws:lb:TargetGroup target creating (0s) 
+ +  aws:lb:LoadBalancer alb creating (0s) 
+ +  aws:rds:SubnetGroup db creating (0s) error:   sdk-v2/provider2.go:572: sdk.helper_schema: creating RDS DB Subnet Group (db-e0d30fe): operation error RDS: CreateDBSubnetGroup, https response error StatusCode: 501, RequestID: 73612e60-4c80-4392-837a-8cc0cf2a6f15, api error InternalFailure: The API for service rds is either not included in your current license plan or has not yet been emulated by LocalStack.: provider=aws@7.32.0
+ +  aws:rds:SubnetGroup db creating (0s) error: 1 error occurred:
+ +  aws:rds:SubnetGroup db **creating failed** error: 1 error occurred:
+ +  aws:lb:TargetGroup target creating (0s) error:   sdk-v2/provider2.go:572: sdk.helper_schema: reading ELBv2 Target Group (target-1af243a): operation error Elastic Load Balancing v2: DescribeTargetGroups, https response error StatusCode: 501, RequestID: 24406c81-5811-40be-8ace-83214237fe94, api error InternalFailure: The API for service elbv2 is either not included in your current license plan or has not yet been emulated by LocalStack.: provider=aws@7.32.0
+ +  aws:lb:TargetGroup target creating (0s) error: 1 error occurred:
+ +  aws:lb:TargetGroup target **creating failed** error: 1 error occurred:
+ +  aws:lb:LoadBalancer alb creating (0s) error:   sdk-v2/provider2.go:572: sdk.helper_schema: reading ELBv2 Load Balancer (alb-fcddcf0): operation error Elastic Load Balancing v2: DescribeLoadBalancers, https response error StatusCode: 501, RequestID: abd6d08a-5cb2-4886-8487-6739fab7bc6b, api error InternalFailure: The API for service elbv2 is either not included in your current license plan or has not yet been emulated by LocalStack.: provider=aws@7.32.0
+ +  aws:lb:LoadBalancer alb creating (0s) error: 1 error occurred:
+ +  aws:lb:LoadBalancer alb **creating failed** error: 1 error occurred:
+ +  aws:iam:Role lambda created (0.04s) 
+ +  pulumi:pulumi:Stack hw31-demo-demo creating (2s) error: update failed
+ +  pulumi:pulumi:Stack hw31-demo-demo creating (2s) error: Running program '/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/' failed with an unhandled exception:
+ +  pulumi:pulumi:Stack hw31-demo-demo **creating failed** 2 errors
+Diagnostics:
+  pulumi:pulumi:Stack (hw31-demo-demo):
+    error: update failed
+    error: Running program '/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/' failed with an unhandled exception:
+    [36m<ref *1>[39m Error: error serializing property "function": Channel has been shut down
+        at InternalChannel.createCall [90m(/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/internal-channel.ts:941:13[90m)[39m
+        at ChannelImplementation.createCall [90m(/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/channel.ts:166:33[90m)[39m
+        at getCall [90m(/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/client-interceptors.ts:354:24[90m)[39m
+        at getBottomInterceptingCall [90m(/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/client-interceptors.ts:488:16[90m)[39m
+        at [90m/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/client-interceptors.ts:582:7
+        at [90m/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@pulumi[24m/runtime/settings.ts:52:42
+        at [90m/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/client-interceptors.ts:579:32
+        at getInterceptingCall [90m(/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/client-interceptors.ts:584:10[90m)[39m
+        at ServiceClientImpl.makeUnaryRequest [90m(/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/client.ts:312:64[90m)[39m
+        at ServiceClientImpl.registerResource [90m(/Users/nick/Documents/Cources/Node PRO/node-pro-course/marketplace/infra/demo/[39mnode_modules/[4m@grpc[24m/grpc-js/src/make-client.ts:189:15[90m)[39m {
+      promise: Promise { [36m<rejected>[39m [36m[Circular *1][39m }
+    }
+
+  aws:rds:SubnetGroup (db):
+    error:   sdk-v2/provider2.go:572: sdk.helper_schema: creating RDS DB Subnet Group (db-e0d30fe): operation error RDS: CreateDBSubnetGroup, https response error StatusCode: 501, RequestID: 73612e60-4c80-4392-837a-8cc0cf2a6f15, api error InternalFailure: The API for service rds is either not included in your current license plan or has not yet been emulated by LocalStack.: provider=aws@7.32.0
+    error: 1 error occurred:
+    	* creating RDS DB Subnet Group (db-e0d30fe): operation error RDS: CreateDBSubnetGroup, https response error StatusCode: 501, RequestID: 73612e60-4c80-4392-837a-8cc0cf2a6f15, api error InternalFailure: The API for service rds is either not included in your current license plan or has not yet been emulated by LocalStack.
+
+  aws:lb:TargetGroup (target):
+    error:   sdk-v2/provider2.go:572: sdk.helper_schema: reading ELBv2 Target Group (target-1af243a): operation error Elastic Load Balancing v2: DescribeTargetGroups, https response error StatusCode: 501, RequestID: 24406c81-5811-40be-8ace-83214237fe94, api error InternalFailure: The API for service elbv2 is either not included in your current license plan or has not yet been emulated by LocalStack.: provider=aws@7.32.0
+    error: 1 error occurred:
+    	* reading ELBv2 Target Group (target-1af243a): operation error Elastic Load Balancing v2: DescribeTargetGroups, https response error StatusCode: 501, RequestID: 24406c81-5811-40be-8ace-83214237fe94, api error InternalFailure: The API for service elbv2 is either not included in your current license plan or has not yet been emulated by LocalStack.
+
+  aws:lb:LoadBalancer (alb):
+    error:   sdk-v2/provider2.go:572: sdk.helper_schema: reading ELBv2 Load Balancer (alb-fcddcf0): operation error Elastic Load Balancing v2: DescribeLoadBalancers, https response error StatusCode: 501, RequestID: abd6d08a-5cb2-4886-8487-6739fab7bc6b, api error InternalFailure: The API for service elbv2 is either not included in your current license plan or has not yet been emulated by LocalStack.: provider=aws@7.32.0
+    error: 1 error occurred:
+    	* reading ELBv2 Load Balancer (alb-fcddcf0): operation error Elastic Load Balancing v2: DescribeLoadBalancers, https response error StatusCode: 501, RequestID: abd6d08a-5cb2-4886-8487-6739fab7bc6b, api error InternalFailure: The API for service elbv2 is either not included in your current license plan or has not yet been emulated by LocalStack.
+
+Resources:
+    + 3 created
+    4 errored
+
+Duration: 3s
+

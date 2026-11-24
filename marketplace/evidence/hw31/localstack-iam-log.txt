@@ -1,0 +1,12 @@
+localstack-1  | 2026-11-24T21:53:43.191  INFO --- [et.reactor-1] localstack.request.aws     : AWS iam.GetRolePolicy => 200
+localstack-1  | 2026-11-24T21:53:43.482  INFO --- [et.reactor-0] localstack.request.aws     : AWS iam.CreateUser => 200
+localstack-1  | 2026-11-24T21:53:43.486  INFO --- [et.reactor-8] localstack.request.aws     : AWS iam.CreateAccessKey => 200
+localstack-1  | 2026-11-24T21:53:43.488  INFO --- [et.reactor-3] localstack.request.aws     : AWS iam.PutUserPolicy => 200
+localstack-1  | 2026-11-24T21:53:43.518  INFO --- [et.reactor-7] localstack.request.aws     : AWS s3.CreateBucket => 200
+localstack-1  | 2026-11-24T21:53:43.522  INFO --- [et.reactor-4] localstack.request.aws     : AWS s3.PutObject => 200
+localstack-1  | 2026-11-24T21:53:43.529  INFO --- [et.reactor-6] localstack.request.aws     : AWS s3.GetObject => 200
+localstack-1  | 2026-11-24T21:53:43.534  INFO --- [et.reactor-5] localstack.request.aws     : AWS s3.DeleteObject => 204
+localstack-1  | 2026-11-24T21:53:43.540  INFO --- [et.reactor-2] localstack.request.aws     : AWS s3.DeleteBucket => 204
+localstack-1  | 2026-11-24T21:53:43.542  INFO --- [et.reactor-1] localstack.request.aws     : AWS iam.DeleteAccessKey => 200
+localstack-1  | 2026-11-24T21:53:43.545  INFO --- [et.reactor-0] localstack.request.aws     : AWS iam.DeleteUserPolicy => 200
+localstack-1  | 2026-11-24T21:53:43.547  INFO --- [et.reactor-8] localstack.request.aws     : AWS iam.DeleteUser => 200

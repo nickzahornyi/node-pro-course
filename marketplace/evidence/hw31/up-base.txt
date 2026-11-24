@@ -1,0 +1,166 @@
+Updating (base):
+
+ +  pulumi:pulumi:Stack hw31-base-base creating (0s) 
+@ updating.........
+ +  pulumi:providers:aws localstack creating (0s) 
+ +  pulumi:providers:aws localstack created (0.04s) 
+ +  aws:ec2:Vpc vpc creating (0s) 
+ +  aws:iam:OpenIdConnectProvider github creating (0s) 
+ +  aws:iam:OpenIdConnectProvider github created (0.05s) 
+ +  aws:iam:Role teardown creating (0s) 
+ +  aws:iam:Role teardown created (0.03s) 
+ +  aws:iam:RolePolicy inventory creating (0s) 
+ +  aws:ec2:Vpc vpc created (0.10s) 
+ +  aws:iam:RolePolicy inventory created (0.02s) 
+ +  aws:ec2:Subnet private-1 creating (0s) 
+ +  aws:ec2:RouteTable private-0 creating (0s) 
+ +  aws:ec2:Subnet private-0 creating (0s) 
+ +  aws:ec2:Subnet public-0 creating (0s) 
+ +  aws:ec2:InternetGateway igw creating (0s) 
+ +  aws:ec2:Subnet public-1 creating (0s) 
+ +  aws:ec2:RouteTable private-1 creating (0s) 
+ +  aws:ec2:SecurityGroup alb creating (0s) 
+ +  aws:ec2:SecurityGroup app creating (0s) 
+ +  aws:ec2:Subnet private-0 created (0.08s) 
+ +  aws:ec2:InternetGateway igw created (0.09s) 
+ +  aws:ec2:Subnet private-1 created (0.09s) 
+ +  aws:ec2:RouteTable public creating (0s) 
+ +  aws:ec2:RouteTable private-1 created (0.19s) 
+ +  aws:ec2:RouteTable private-0 created (0.19s) 
+ +  aws:ec2:RouteTableAssociation private-1 creating (0s) 
+ +  aws:ec2:RouteTableAssociation private-0 creating (0s) 
+ +  aws:ec2:RouteTableAssociation private-1 created (0.02s) 
+ +  aws:ec2:RouteTableAssociation private-0 created (0.03s) 
+ +  aws:ec2:SecurityGroup alb created (0.32s) 
+ +  aws:ec2:SecurityGroup app created (0.32s) 
+ +  aws:ec2:RouteTable public created (0.24s) 
+ +  aws:ec2:SecurityGroup db creating (0s) 
+ +  aws:ec2:SecurityGroup db created (0.24s) 
+@ updating.............
+ +  aws:ec2:Subnet public-0 created (10s) 
+ +  aws:ec2:Subnet public-1 created (10s) 
+ +  aws:ec2:RouteTableAssociation public-0 creating (0s) 
+ +  aws:ec2:RouteTableAssociation public-1 creating (0s) 
+ +  aws:ec2:RouteTableAssociation public-0 created (0.03s) 
+ +  aws:ec2:RouteTableAssociation public-1 created (0.02s) 
+ +  pulumi:pulumi:Stack hw31-base-base created (15s) 
+Outputs:
+    albSecurityGroupId  : "sg-416694f59bb70d11a"
+    dbSecurityGroupId   : "sg-81a155f6bb10cfd70"
+    permissionPolicy    : (json) {
+        Statement: [
+            [0]: {
+                Action  : [
+                    [0]: "ec2:DescribeVpcs"
+                    [1]: "ec2:DescribeSubnets"
+                    [2]: "ec2:DescribeRouteTables"
+                    [3]: "ec2:DescribeSecurityGroups"
+                    [4]: "ec2:DescribeNatGateways"
+                    [5]: "ec2:DescribeAddresses"
+                    [6]: "rds:DescribeDBInstances"
+                    [7]: "elasticloadbalancing:DescribeLoadBalancers"
+                    [8]: "tag:GetResources"
+                ]
+                Effect  : "Allow"
+                Resource: "*"
+            }
+            [1]: {
+                Action  : [
+                    [0]: "rds:DeleteDBInstance"
+                    [1]: "rds:DeleteDBSubnetGroup"
+                    [2]: "rds:DescribeDBSubnetGroups"
+                    [3]: "rds:ListTagsForResource"
+                ]
+                Effect  : "Allow"
+                Resource: [
+                    [0]: "arn:aws:rds:eu-central-1:000000000000:db:hw31-db-*"
+                    [1]: "arn:aws:rds:eu-central-1:000000000000:subgrp:db-*"
+                ]
+            }
+            [2]: {
+                Action  : [
+                    [0]: "elasticloadbalancing:DeleteLoadBalancer"
+                    [1]: "elasticloadbalancing:DeleteTargetGroup"
+                    [2]: "elasticloadbalancing:DeleteListener"
+                    [3]: "elasticloadbalancing:DeregisterTargets"
+                ]
+                Effect  : "Allow"
+                Resource: [
+                    [0]: "arn:aws:elasticloadbalancing:eu-central-1:000000000000:loadbalancer/app/alb-*/*"
+                    [1]: "arn:aws:elasticloadbalancing:eu-central-1:000000000000:targetgroup/target-*/*"
+                    [2]: "arn:aws:elasticloadbalancing:eu-central-1:000000000000:listener/app/alb-*/*/*"
+                ]
+            }
+            [3]: {
+                Action  : [
+                    [0]: "elasticloadbalancing:DescribeTargetGroups"
+                    [1]: "elasticloadbalancing:DescribeTargetHealth"
+                    [2]: "elasticloadbalancing:DescribeListeners"
+                    [3]: "elasticloadbalancing:DescribeTags"
+                    [4]: "elasticloadbalancing:DescribeLoadBalancerAttributes"
+                    [5]: "elasticloadbalancing:DescribeTargetGroupAttributes"
+                ]
+                Effect  : "Allow"
+                Resource: "*"
+            }
+            [4]: {
+                Action  : [
+                    [0]: "lambda:DeleteFunction"
+                    [1]: "lambda:RemovePermission"
+                    [2]: "lambda:GetFunction"
+                    [3]: "lambda:GetPolicy"
+                    [4]: "lambda:ListTags"
+                ]
+                Effect  : "Allow"
+                Resource: "arn:aws:lambda:eu-central-1:000000000000:function:health-*"
+            }
+            [5]: {
+                Action  : [
+                    [0]: "iam:GetRole"
+                    [1]: "iam:DeleteRole"
+                    [2]: "iam:ListRolePolicies"
+                    [3]: "iam:ListAttachedRolePolicies"
+                    [4]: "iam:ListInstanceProfilesForRole"
+                ]
+                Effect  : "Allow"
+                Resource: "arn:aws:iam::000000000000:role/lambda-*"
+            }
+            [6]: {
+                Action   : [
+                    [0]: "ec2:DeleteNatGateway"
+                    [1]: "ec2:ReleaseAddress"
+                ]
+                Condition: {
+                    StringEquals: {
+                        aws:ResourceTag/Project: "nodejs-pro-hw31"
+                        aws:ResourceTag/Stack  : "demo"
+                    }
+                }
+                Effect   : "Allow"
+                Resource : "*"
+            }
+        ]
+        Version  : "2012-10-17"
+    }
+
+    privateRouteTableIds: [
+        [0]: "rtb-1867716c34f27d6c0"
+        [1]: "rtb-757027182f6afdb9c"
+    ]
+    privateSubnetIds    : [
+        [0]: "subnet-efa5da1645d36b152"
+        [1]: "subnet-939182cd40361631b"
+    ]
+    publicSubnetIds     : [
+        [0]: "subnet-d0422447871e4936c"
+        [1]: "subnet-d307ed049f6404f5a"
+    ]
+    roleArn             : "arn:aws:iam::000000000000:role/teardown-d24b388"
+    roleName            : "teardown-d24b388"
+    vpcId               : "vpc-bfcbaf76e390f252b"
+
+Resources:
+    + 21 created
+
+Duration: 17s
+
