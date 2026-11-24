@@ -6,7 +6,10 @@ const mode = process.argv[2];
 assert(['logs','metrics','trace'].includes(mode), 'Expected logs, metrics or trace');
 const build = spawnSync('npm', ['run','build'], { encoding: 'utf8' });
 if (build.status !== 0) { process.stderr.write(build.stdout + build.stderr); process.exit(1); }
-const child = fork(new URL('./observability-server.mjs', import.meta.url), [], { silent: true });
+const marker = `bearer-${randomBytes(12).toString('hex')}`, password = `password-${randomBytes(12).toString('hex')}`;
+const child = fork(new URL('./observability-server.mjs', import.meta.url), [], {
+  silent: true, env: { ...process.env, OBS_DEMO_PASSWORD: password },
+});
 const lines = []; let pending = ''; let stderr = '';
 child.stdout.on('data', chunk => { pending += chunk; const parts = pending.split('\n'); pending = parts.pop(); lines.push(...parts); });
 child.stderr.on('data', chunk => { stderr += chunk; });
@@ -30,29 +33,34 @@ const route = labels => labels.route === '/products/:productId/card';
 const sum = rows => rows.reduce((n,r) => n+r.value,0);
 const logs = () => { assert.equal(pending,''); return lines.filter(Boolean).map(line => JSON.parse(line)); };
 try {
-  const { port } = await ready; base = `http://127.0.0.1:${port}`;
+  const { port, buckets } = await ready; base = `http://127.0.0.1:${port}`;
   if (mode === 'logs') {
     const header = tp(); const response = await request('1',header);
     await new Promise(resolve => setTimeout(resolve, 50));
     const single = logs().slice();
     const burst = 8; const headers = Array.from({ length: burst }, tp);
     await Promise.all(headers.map(h => request('1',h)));
-    const marker = `bearer-${randomBytes(12).toString('hex')}`, password = `password-${randomBytes(12).toString('hex')}`;
     const secretHeader = tp();
-    await (await fetch(`${base}/auth/login`, { method:'POST', headers:{ traceparent:secretHeader, authorization:`Bearer ${marker}`, 'content-type':'application/json' }, body:JSON.stringify({ email:'demo@example.invalid', password }) })).text();
+    const login = await fetch(`${base}/auth/login`, { method:'POST', headers:{ traceparent:secretHeader, authorization:`Bearer ${marker}`, 'content-type':'application/json' }, body:JSON.stringify({ email:'demo@example.invalid', password }) });
+    assert.equal(login.status, 200, 'Real HW-24 login must accept the fixture password');
+    const tokens = await login.json();
+    assert.equal(typeof tokens.access_token, 'string');
+    assert.equal(typeof tokens.refresh_token, 'string');
     await new Promise(resolve => setTimeout(resolve, 50));
     const parsed = logs(), id = header.split('-')[1];
     const groups = headers.map(h => parsed.filter(l => l.trace_id === h.split('-')[1]));
+    const sizes = groups.map(g => g.length);
     const values = { 'non-json-lines': lines.filter(l => { try { JSON.parse(l); return false; } catch { return true; } }).length,
       layers: new Set(single.map(l => l.layer)).size, 'distinct-trace-ids':new Set(single.map(l => l.trace_id)).size,
       'trace-id-matches-header':Number(single.length > 0 && single.every(l => l.trace_id === id) && response.headers.get('traceparent')?.split('-')[1] === id),
       burst, 'burst-trace-ids':new Set(groups.flat().map(l => l.trace_id)).size,
-      'burst-uneven':groups.filter(g => g.length !== single.length || new Set(g.map(l => l.layer)).size < 3).length,
+      'burst-uneven':Math.max(...sizes) - Math.min(...sizes),
       'secret-req-logged':Number(parsed.some(l => l.trace_id === secretHeader.split('-')[1] && l.event === 'request')),
       'secret-in-logs':Number(lines.some(l => l.includes(marker) || l.includes(password))) };
     output(values);
     assert(values.layers >= 3); assert.equal(values['non-json-lines'],0); assert.equal(values['distinct-trace-ids'],1);
     assert.equal(values['trace-id-matches-header'],1); assert.equal(values['burst-trace-ids'],burst);
+    assert(groups.every(g => g.length === single.length && new Set(g.map(l => l.layer)).size >= 3), 'Every burst group must contain the complete request path');
     assert.equal(values['burst-uneven'],0); assert.equal(values['secret-req-logged'],1); assert.equal(values['secret-in-logs'],0);
   }
   if (mode === 'metrics') {
@@ -63,10 +71,12 @@ try {
     const after = await scrape();
     for (let n=1;n<=100;n++) assert.equal((await request(String(n))).status,200);
     const cardinality = await scrape();
+    const topBucket = buckets.at(-1);
+    assert(Number.isFinite(topBucket), 'Expected a finite upper histogram bucket');
     const counts = text => sample(text,'http_requests_total',route);
     const values = { 'sent-ok':ok, 'sent-fail':fail, 'counter-delta':sum(counts(after))-sum(counts(before)),
       'errors-delta':sum(counts(after).filter(r=>r.labels.status==='500'))-sum(counts(before).filter(r=>r.labels.status==='500')),
-      'above-top-bucket':sum(sample(cardinality,'http_request_duration_seconds_count',route))-sum(sample(cardinality,'http_request_duration_seconds_bucket',l=>route(l)&&l.le==='120')),
+      'above-top-bucket':sum(sample(cardinality,'http_request_duration_seconds_count',route))-sum(sample(cardinality,'http_request_duration_seconds_bucket',l=>route(l)&&l.le===String(topBucket))),
       'series-before':counts(before).length,'series-after':counts(cardinality).length };
     output(values); assert(ok+fail>=50); assert(fail>0); assert.equal(values['counter-delta'],ok+fail);
     assert.equal(values['errors-delta'],fail); assert.equal(values['above-top-bucket'],0); assert.equal(values['series-after'],values['series-before']);
