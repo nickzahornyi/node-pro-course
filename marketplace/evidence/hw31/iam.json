@@ -1,0 +1,146 @@
+{
+  "Role": {
+    "Path": "/",
+    "RoleName": "teardown-d24b388",
+    "RoleId": "AROAQAAAAAAAMGAR7VTJM",
+    "Arn": "arn:aws:iam::000000000000:role/teardown-d24b388",
+    "CreateDate": "2026-11-24T21:53:25.525637Z",
+    "AssumeRolePolicyDocument": {
+      "Statement": [
+        {
+          "Action": "sts:AssumeRoleWithWebIdentity",
+          "Condition": {
+            "StringEquals": {
+              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+            },
+            "StringLike": {
+              "token.actions.githubusercontent.com:sub": "repo:nickzahornyi/node-pro-course:ref:refs/heads/hw-31"
+            }
+          },
+          "Effect": "Allow",
+          "Principal": {
+            "Federated": "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"
+          }
+        }
+      ],
+      "Version": "2012-10-17"
+    },
+    "MaxSessionDuration": 3600,
+    "Tags": [
+      {
+        "Key": "ManagedBy",
+        "Value": "pulumi"
+      },
+      {
+        "Key": "Project",
+        "Value": "nodejs-pro-hw31"
+      },
+      {
+        "Key": "Stack",
+        "Value": "base"
+      }
+    ],
+    "RoleLastUsed": {}
+  },
+  "policies": [
+    {
+      "RoleName": "teardown-d24b388",
+      "PolicyName": "inventory-8c1901c",
+      "PolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Action": [
+              "ec2:DescribeVpcs",
+              "ec2:DescribeSubnets",
+              "ec2:DescribeRouteTables",
+              "ec2:DescribeSecurityGroups",
+              "ec2:DescribeNatGateways",
+              "ec2:DescribeAddresses",
+              "rds:DescribeDBInstances",
+              "elasticloadbalancing:DescribeLoadBalancers",
+              "tag:GetResources"
+            ],
+            "Effect": "Allow",
+            "Resource": "*"
+          },
+          {
+            "Action": [
+              "rds:DeleteDBInstance",
+              "rds:DeleteDBSubnetGroup",
+              "rds:DescribeDBSubnetGroups",
+              "rds:ListTagsForResource"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:rds:eu-central-1:000000000000:db:hw31-db-*",
+              "arn:aws:rds:eu-central-1:000000000000:subgrp:db-*"
+            ]
+          },
+          {
+            "Action": [
+              "elasticloadbalancing:DeleteLoadBalancer",
+              "elasticloadbalancing:DeleteTargetGroup",
+              "elasticloadbalancing:DeleteListener",
+              "elasticloadbalancing:DeregisterTargets"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:elasticloadbalancing:eu-central-1:000000000000:loadbalancer/app/alb-*/*",
+              "arn:aws:elasticloadbalancing:eu-central-1:000000000000:targetgroup/target-*/*",
+              "arn:aws:elasticloadbalancing:eu-central-1:000000000000:listener/app/alb-*/*/*"
+            ]
+          },
+          {
+            "Action": [
+              "elasticloadbalancing:DescribeTargetGroups",
+              "elasticloadbalancing:DescribeTargetHealth",
+              "elasticloadbalancing:DescribeListeners",
+              "elasticloadbalancing:DescribeTags",
+              "elasticloadbalancing:DescribeLoadBalancerAttributes",
+              "elasticloadbalancing:DescribeTargetGroupAttributes"
+            ],
+            "Effect": "Allow",
+            "Resource": "*"
+          },
+          {
+            "Action": [
+              "lambda:DeleteFunction",
+              "lambda:RemovePermission",
+              "lambda:GetFunction",
+              "lambda:GetPolicy",
+              "lambda:ListTags"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:lambda:eu-central-1:000000000000:function:health-*"
+          },
+          {
+            "Action": [
+              "iam:GetRole",
+              "iam:DeleteRole",
+              "iam:ListRolePolicies",
+              "iam:ListAttachedRolePolicies",
+              "iam:ListInstanceProfilesForRole"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:iam::000000000000:role/lambda-*"
+          },
+          {
+            "Action": [
+              "ec2:DeleteNatGateway",
+              "ec2:ReleaseAddress"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "aws:ResourceTag/Project": "nodejs-pro-hw31",
+                "aws:ResourceTag/Stack": "demo"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": "*"
+          }
+        ]
+      }
+    }
+  ]
+}

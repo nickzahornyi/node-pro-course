@@ -1,0 +1,83 @@
+Previewing destroy (base):
+
+@ previewing destroy....
+ -  aws:ec2:RouteTableAssociation public-1 delete 
+ -  aws:ec2:RouteTableAssociation public-0 delete 
+ -  aws:ec2:RouteTableAssociation private-1 delete 
+ -  aws:ec2:RouteTableAssociation private-0 delete 
+ -  aws:ec2:RouteTable public delete 
+ -  aws:iam:RolePolicy inventory delete 
+ -  aws:ec2:SecurityGroup db delete 
+ -  aws:ec2:RouteTable private-1 delete 
+ -  aws:ec2:InternetGateway igw delete 
+ -  aws:ec2:Subnet private-0 delete 
+ -  aws:ec2:Subnet public-1 delete 
+ -  aws:iam:Role teardown delete 
+ -  aws:ec2:Subnet public-0 delete 
+ -  aws:ec2:Subnet private-1 delete 
+ -  aws:ec2:SecurityGroup alb delete 
+ -  aws:ec2:SecurityGroup app delete 
+ -  aws:ec2:RouteTable private-0 delete 
+ -  aws:ec2:Vpc vpc delete 
+ -  aws:iam:OpenIdConnectProvider github delete 
+ -  pulumi:providers:aws localstack delete 
+ -  pulumi:pulumi:Stack hw31-base-base delete 
+    pulumi:pulumi:Stack hw31-base-base  
+ -  pulumi:pulumi:Stack hw31-base-base delete 
+Resources:
+    - 21 to delete
+
+Destroying (base):
+
+@ destroying....
+ -  aws:ec2:RouteTableAssociation public-0 deleting (0s) 
+ -  aws:ec2:RouteTableAssociation public-1 deleting (0s) 
+ -  aws:ec2:RouteTableAssociation public-0 deleted (0.02s) 
+ -  aws:ec2:RouteTableAssociation public-1 deleted (0.02s) 
+ -  aws:iam:RolePolicy inventory deleting (0s) 
+ -  aws:ec2:RouteTableAssociation private-0 deleting (0s) 
+ -  aws:ec2:RouteTableAssociation private-1 deleting (0s) 
+ -  aws:ec2:RouteTable public deleting (0s) 
+ -  aws:ec2:SecurityGroup db deleting (0s) 
+ -  aws:iam:RolePolicy inventory deleted (0.01s) 
+ -  aws:ec2:RouteTableAssociation private-0 deleted (0.02s) 
+ -  aws:ec2:RouteTableAssociation private-1 deleted (0.02s) 
+ -  aws:ec2:SecurityGroup db deleted (0.03s) 
+@ destroying....
+ -  aws:ec2:RouteTable public deleted (0.24s) 
+ -  aws:ec2:RouteTable private-0 deleting (0s) 
+ -  aws:ec2:Subnet private-0 deleting (0s) 
+ -  aws:ec2:Subnet public-1 deleting (0s) 
+ -  aws:ec2:SecurityGroup app deleting (0s) 
+ -  aws:ec2:Subnet public-0 deleting (0s) 
+ -  aws:ec2:InternetGateway igw deleting (0s) 
+ -  aws:iam:Role teardown deleting (0s) 
+ -  aws:ec2:Subnet private-1 deleting (0s) 
+ -  aws:ec2:RouteTable private-1 deleting (0s) 
+ -  aws:ec2:SecurityGroup alb deleting (0s) 
+ -  aws:iam:Role teardown deleted (0.06s) 
+ -  aws:ec2:Subnet private-0 deleted (0.06s) 
+ -  aws:ec2:Subnet public-1 deleted (0.06s) 
+ -  aws:ec2:Subnet public-0 deleted (0.07s) 
+ -  aws:ec2:InternetGateway igw deleted (0.07s) 
+ -  aws:ec2:SecurityGroup app deleted (0.07s) 
+ -  aws:ec2:Subnet private-1 deleted (0.07s) 
+ -  aws:ec2:SecurityGroup alb deleted (0.07s) 
+ -  aws:ec2:RouteTable private-0 deleted (0.25s) 
+ -  aws:ec2:RouteTable private-1 deleted (0.28s) 
+ -  aws:iam:OpenIdConnectProvider github deleting (0s) 
+ -  aws:ec2:Vpc vpc deleting (0s) 
+ -  aws:iam:OpenIdConnectProvider github deleted (0.01s) 
+ -  aws:ec2:Vpc vpc deleted (0.02s) 
+ -  pulumi:providers:aws localstack deleting (0s) 
+ -  pulumi:providers:aws localstack deleted (0.03s) 
+ -  pulumi:pulumi:Stack hw31-base-base deleting (0s) 
+    pulumi:pulumi:Stack hw31-base-base  
+ -  pulumi:pulumi:Stack hw31-base-base deleted (0.00s) 
+Resources:
+    - 21 deleted
+
+Duration: 3s
+
+The resources in the stack have been deleted, but the history and configuration associated with the stack are still maintained. 
+If you want to remove the stack completely, run `pulumi stack rm base`.

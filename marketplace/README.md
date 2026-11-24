@@ -1934,3 +1934,172 @@ Auth-перевірка тепер вимагає HTTP 200 і видачу acces
 AuthController/AuthService; обидва маркери відсутні в логах. Додатковий прогін
 із тимчасовою заміною останнього бакета 120 → 300 с також дав
 `above-top-bucket=0`; після перевірки вихідний масив відновлено.
+
+
+## AWS
+
+смуга: запасна (LocalStack)
+
+HW-31 виконується виключно локально, без AWS-акаунта та платних ресурсів.
+Програми: `marketplace/infra/base/`, `marketplace/infra/demo/`; докази:
+`marketplace/evidence/hw31/`. Регіон: `eu-central-1`.
+
+teardown-run: локальний прогін; GitHub Actions ще не запускався.
+
+Повторення (Node.js 22+, Docker, Pulumi 3.274.1):
+
+```bash
+cd marketplace # з кореня репозиторію
+npm ci --prefix infra/base
+npm ci --prefix infra/demo
+npm run check --prefix infra/base
+npm run check --prefix infra/demo
+SKIP_VAULT=1 npm run hw31:verify
+SKIP_VAULT=1 npm run hw31:stop
+```
+
+`SKIP_VAULT=1` — наявний у курсі режим локального грейдера: тут немає реальних
+секретів, тільки публічні тестові ключі LocalStack. Усі npm-команди проходять через
+`scripts/with-secrets.sh`; без цього прапорця працює звичайний Infisical-потік #11.
+Нові env-файли не потрібні. `hw31:verify` створює base, зберігає фактичні дані API,
+виконує IAM-експеримент, preview та невдалий demo up і зносить обидва стеки навіть
+після помилки. `hw31:stop` прибирає лише контейнер і мережу цього ДЗ.
+
+Окремі команди: `up:base`, `up:demo`, `destroy:demo`, `destroy:base`,
+`demo:failover`, `demo:nat`, `demo:alb`, `hw31:evidence`, `hw31:iam`.
+Демо чесно друкують `not-evaluated-localstack`: локальна емуляція не є виміром
+AWS failover, здоров'я справжнього ALB чи оплаченої години NAT.
+`up:demo` повинен завершитися помилкою недоступного сервісу, не успіхом.
+
+Образ — `localstack/localstack:4.14.0`, порт — `127.0.0.1:23166`, без auth token.
+Ціна піна: «pinning to a prior version will opt you out of any future updates or
+security patches». Контейнер не має Docker socket, production credentials чи
+постійних даних; після destroy його можна видалити. Не видаляйте контейнер перед
+`destroy`: стан Pulumi і стан емулятора мають залишатися узгодженими.
+
+`aws:defaultTags` і регіон задані в обох `Pulumi.<stack>.yaml`. Провайдер явно
+спрямовує всі використані API на LocalStack і використовує `test/test`; він не
+бере credentials із AWS-профілю. Навіть `pulumi preview` може виконувати provider
+API calls або data-source reads — тут вони спрямовані на LocalStack.
+Див. [конфігурацію Pulumi для LocalStack](https://docs.localstack.cloud/aws/connecting/infrastructure-as-code/pulumi/).
+
+Бюджет описаний першим у base: COST/MONTHLY/$5, ACTUAL/GREATER_THAN/20/PERCENTAGE.
+Мережа залежить від нього, коли його створення ввімкнене. У Community Budgets API
+недоступний: локальний wrapper явно виставляє `HW31_SKIP_BUDGET=1`; бюджет
+перевіряється за кодом, а не видається за створений ресурс. Адреса повідомлень
+`hw31@example.invalid` — локальний placeholder, листів немає.
+
+LocalStack цю IAM-політику не застосовує. Я не перевіряв її виконання локально,
+бо підтвердити AWS IAM enforcement локально неможливо. `evidence/hw31/iam.json`
+містить trust і permissions із API. `localstack-iam.txt` — власний експеримент:
+explicit Deny не зупиняє запис у S3, фіктивний ключ читає той самий об'єкт,
+`ENFORCE_IAM=1` не забезпечує захисту. Рядки логу про заборону рахуються окремо
+від звичайних запитів IAM; сирий лог збережено поруч. Тестовий бакет, об'єкт,
+користувач і ключ видаляються після експерименту. `iam.txt` не містить вигаданих
+`sim-allowed`/`sim-denied`.
+
+OIDC trust обмежений `aud=sts.amazonaws.com` та
+`sub=repo:nickzahornyi/node-pro-course:ref:refs/heads/hw-31`.
+Policy містить тільки названі actions, без wildcard в Action. ARN з account
+`000000000000` належать емулятору; це не готова роль для AWS-акаунта.
+Destroy-права стосуються demo; base, включно з IAM-роллю, зносить локальний оператор.
+Наведені права — предмет code review, а не доведена на AWS політика.
+
+| Дозвіл | Призначення |
+| --- | --- |
+| `ec2:DescribeVpcs` | Перевірка VPC |
+| `ec2:DescribeSubnets` | Кількість підмереж і AZ |
+| `ec2:DescribeRouteTables` | Відсутність default route у приватних підмережах |
+| `ec2:DescribeSecurityGroups` | Перевірка SG |
+| `ec2:DescribeNatGateways` | Інвентар NAT |
+| `ec2:DescribeAddresses` | Інвентар EIP |
+| `rds:DescribeDBInstances` | Читання стану RDS |
+| `rds:DescribeDBSubnetGroups` | Читання DB subnet group |
+| `rds:ListTagsForResource` | Читання тегів RDS |
+| `rds:DeleteDBInstance` | Знесення demo DB |
+| `rds:DeleteDBSubnetGroup` | Знесення subnet group після DB |
+| `elasticloadbalancing:DescribeLoadBalancers` | Інвентар ALB |
+| `elasticloadbalancing:DescribeTargetGroups` | Читання target group |
+| `elasticloadbalancing:DescribeTargetHealth` | Стан Lambda target |
+| `elasticloadbalancing:DescribeListeners` | Читання HTTP listener |
+| `elasticloadbalancing:DescribeTags` | Читання тегів ELB |
+| `elasticloadbalancing:DescribeLoadBalancerAttributes` | Читання атрибутів ALB |
+| `elasticloadbalancing:DescribeTargetGroupAttributes` | Читання атрибутів TG |
+| `elasticloadbalancing:DeleteLoadBalancer` | Знесення ALB |
+| `elasticloadbalancing:DeleteTargetGroup` | Знесення TG |
+| `elasticloadbalancing:DeleteListener` | Знесення listener |
+| `elasticloadbalancing:DeregisterTargets` | Від'єднання Lambda |
+| `lambda:GetFunction` | Читання demo function |
+| `lambda:GetPolicy` | Читання дозволу ALB |
+| `lambda:ListTags` | Читання тегів Lambda |
+| `lambda:RemovePermission` | Видалення дозволу ALB |
+| `lambda:DeleteFunction` | Знесення Lambda |
+| `iam:GetRole` | Читання execution role Lambda |
+| `iam:ListRolePolicies` | Перевірка inline policies execution role |
+| `iam:ListAttachedRolePolicies` | Перевірка attached policies execution role |
+| `iam:ListInstanceProfilesForRole` | Перевірка зв'язків перед видаленням ролі |
+| `iam:DeleteRole` | Видалення тільки execution role Lambda |
+| `ec2:DeleteNatGateway` | Знесення NAT із тегами Project/Stack=demo |
+| `ec2:ReleaseAddress` | Звільнення EIP із тегами Project/Stack=demo |
+| `tag:GetResources` | Пошук ресурсів за Project |
+
+`Resource: "*"` для інвентаризації потрібний для list/describe API. Права видалення
+RDS, ELB, Lambda та її execution role обмежені ARN; EC2 — тегами demo.
+
+**RDS Multi-AZ проти мого стека #15.** У репозиторії #15 — Compose PostgreSQL,
+PgBouncer та `scripts/backup.sh`/restore drill. RDS instance Multi-AZ бере на себе
+standby в іншій AZ, реплікацію, кероване перемикання, автоматичні backups і
+обслуговування DB instance. Standby не є read replica для масштабування читань.
+PgBouncer/керування пулом з'єднань, міграції, індекси, retry/reconnect застосунку,
+перевірка відновлення, політика retention та логічні експортні копії залишаються
+нашою відповідальністю. Lambda у цьому ДЗ — окремий health-response target,
+не розгорнутий marketplace API і не доказ доступу до RDS.
+
+KMS — шар шифрування під сховищем #11: може захищати `ENCRYPTION_KEY`, але не
+замінює доставку й ротацію секретів через Infisical. Customer-managed key тут
+не створюється; у визначенні RDS увімкнене storage encryption без власного ключа.
+
+Backend, як у #28, локальний `file://`, але окремий `.pulumi/hw31-state`.
+Окремий `PULUMI_HOME=.pulumi/hw31-home` не змінює глобальний Pulumi login.
+На локальній смузі такий backend дозволений. GitHub runner не бачить ноутбук:
+workflow відтворює власний тимчасовий стенд, зносить його й завантажує evidence.
+Це не віддалене знесення ноутбука. Реальний AWS варіант потребував би спільного
+backend та перевіреного OIDC, тут workflow навмисно не автентифікується в AWS.
+`schedule` і `workflow_dispatch` присутні. Локальний контракт — виміряне
+`state-resources-left=0` для **обох** стеків; недоступні RDS/ALB API не підміняються
+вигаданими нулями. Посилання на Actions можна додати після публікації й запуску workflow.
+
+**Вартість.** Фактичні AWS-витрати цього варіанта — $0: ресурси існують лише в
+Docker. Нижче навчальний розрахунок за ставками з умови (знімок 24.08.2026),
+а не підтверджений актуальний комерційний кошторис. Місяць = 730 годин.
+
+| Позиція | $/год (еквівалент) | $/730 год |
+| --- | ---: | ---: |
+| ALB | 0.027 | 19.71 |
+| RDS db.t4g.micro Multi-AZ | 0.037 | 27.01 |
+| gp3 20 GiB Multi-AZ | 5.48 / 730 | 5.48 |
+| 2 public IPv4 ALB | 0.010 | 7.30 |
+| LCU, припущення навчального навантаження | 0.29 / 730 | 0.29 |
+| Разом без NAT | 0.081904 | 59.79 |
+| Опційний NAT + одна IPv4 | 0.057 | 41.61 |
+
+4 години за середньою ставкою ≈ $0.328; доба ≈ $1.966. Це модель, не рахунок:
+округлення сервісів і Lambda requests/duration залежать від використання.
+Офіційні сторінки переглянуто 24.11.2026; дату публікації поточного прайса вони
+не вказують: [ALB](https://aws.amazon.com/elasticloadbalancing/pricing/),
+[RDS PostgreSQL](https://aws.amazon.com/rds/postgresql/pricing/),
+[VPC/NAT/IPv4](https://aws.amazon.com/vpc/pricing/).
+ALB/NAT округлюють частину години до повної; RDS — посекундно з мінімумом 10 хв
+після billable status change. У локальному ДЗ оплаченої NAT-години немає.
+
+Фактичний образ 4.14.0 повертає формулювання `not included in your current license
+plan or has not yet been emulated by LocalStack`. Перевірка приймає і це
+формулювання, і `not included within your LocalStack license` з умови. Сирий
+`501.txt` не редагується під grep грейдера; точна фраза залежить від емулятора.
+
+Перевірено локально 24.11.2026: обидва `tsc --noEmit` успішні; 2 публічні +
+2 приватні підмережі у 2 AZ, 0 default routes у приватних таблицях, 3 SG,
+12 тегованих ресурсів. IAM-експеримент підтвердив `deny-all=200`, `fake-key=200`,
+`enforce-iam-log-lines=0`. Preview містить RDS Instance, ALB і target group;
+реальний demo up повернув HTTP 501. Після `pulumi destroy` обох стеків:
+`state-resources-left=0`. Це докази локального прогону, не тест реального AWS.

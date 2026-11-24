@@ -1,0 +1,36 @@
+[
+  {
+    "version": 3,
+    "deployment": {
+      "manifest": {
+        "time": "2026-11-24T23:53:57.597844+02:00",
+        "magic": "294a449188e3da4517a05ae33e5c1307bbafa419a82735db7986e01d5ec6b1c0",
+        "version": "v3.274.1"
+      },
+      "secrets_providers": {
+        "type": "passphrase",
+        "state": {
+          "salt": "v1:HBPL6ZU/mv8=:v1:X45t5DwKkTkt6o1A:fDGiTpteHrazrZZOX0wUC0Gan6XE7w=="
+        }
+      },
+      "metadata": {}
+    }
+  },
+  {
+    "version": 3,
+    "deployment": {
+      "manifest": {
+        "time": "2026-11-24T23:54:02.231504+02:00",
+        "magic": "294a449188e3da4517a05ae33e5c1307bbafa419a82735db7986e01d5ec6b1c0",
+        "version": "v3.274.1"
+      },
+      "secrets_providers": {
+        "type": "passphrase",
+        "state": {
+          "salt": "v1:9UihC25dPuA=:v1:/oQEvO+heorXHMPI:Hfg6JrVx56sNLggjlc/HmsYv64c+2A=="
+        }
+      },
+      "metadata": {}
+    }
+  }
+]

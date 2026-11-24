@@ -1,0 +1,2 @@
+simulation=not-evaluated-localstack
+See localstack-iam.txt: policy enforcement is not implemented.
